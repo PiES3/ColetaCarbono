@@ -1,0 +1,18 @@
+[project]
+name = "coletacarbono"
+version = "0.1.0"
+description = "Sistema de calculo, registro e validação de emição de carbono"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "dotenv>=0.9.9",
+    "fastapi>=0.141.1",
+    "gunicorn>=26.2.0",
+    "loguru>=0.7.3",
+    "passlib[bcrypt]>=1.7.4",
+    "pydantic[email]>=2.13.5",
+    "pyjwt>=2.14.0",
+    "sqlalchemy>=2.0.54",
+    "uvicorn>=0.53.0",
+]

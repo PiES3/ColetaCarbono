@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 from pydantic import BaseModel, Field
-from src.models.enums import StatusEmpresa
+from src.schemas.enums import StatusEmpresa
 
 class Empresa(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 from decimal import Decimal
 from pydantic import BaseModel, Field
-from src.models.enums import Statusvalidacao
+from src.schemas.enums import Statusvalidacao
 
 class Registro(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

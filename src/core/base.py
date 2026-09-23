@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def gen_uuid() -> str:
@@ -12,8 +13,9 @@ class Base(DeclarativeBase):
     pass
 
 class TimestampMixin:
-    """mixin para adicionar automaticamente created_at e updated_at em todas as tabelas"""
+    """Mixin para adicionar automaticamente datas de criação, atualização e eliminação lógica"""
     created_at: Mapped[datetime] = mapped_column(default=get_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         default=get_utc_now, onupdate=get_utc_now
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)

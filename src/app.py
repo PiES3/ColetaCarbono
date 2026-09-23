@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from src.core.base import Base # Importa a base correta
 from src.core.database import engine
 from src.routers import registro
+from src.routers import empresas
+from src.routers import materiais
 
 # IMPORTANTE: Você precisa importar os models aqui para que o 
 # SQLAlchemy leia as classes antes de executar o create_all.
@@ -31,3 +33,5 @@ app = FastAPI(
 )
 
 app.include_router(registro.router)
+app.include_router(empresas.router)
+app.include_router(materiais.router)

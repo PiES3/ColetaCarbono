@@ -17,3 +17,12 @@ dependencies = [
     "sqlalchemy>=2.0.54",
     "uvicorn>=0.53.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.9",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "FAST"]

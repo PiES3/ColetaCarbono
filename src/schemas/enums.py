@@ -1,20 +1,20 @@
-from enum import Enum
+from enum import StrEnum
 
-class Perfil(str, Enum):
+
+class Perfil(StrEnum):
     ADMIN = "ADMIN"
     GESTOR = "GESTOR"
     COMUM = "COMUM"
 
 
-class StatusVinculo(str, Enum):
-
+class StatusVinculo(StrEnum):
     AGUARDANDO_VALIDACAO = "AGUARDANDO VALIDACAO"
     APROVADA = "APROVADA"
     RECUSADA = "RECUSADA"
     DESASSOCIADA = "DESASSOCIADA"
 
-class StatusValidacao(str, Enum):
 
+class StatusValidacao(StrEnum):
     PENDENTE = "PENDENTE"
     VALIDADO = "VALIDADO"
     RECUSADA = "RECUSADA"

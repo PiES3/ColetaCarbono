@@ -8,6 +8,7 @@ from src.core.database import get_db
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import EmpresaCreate, EmpresaResponse
+from src.services.auth_service import auth_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
 
@@ -25,36 +26,7 @@ def autocadastro_empresa(
     Permite que uma empresa faça o autocadastro vinculando-se a uma prefeitura (HU001).
     A empresa nasce com o status 'AGUARDANDO_VALIDACAO'.
     """
-    empresa_email = getattr(empresa_in, "email", None)
-    filtros_existencia = [Empresa.cnpj == empresa_in.cnpj]
-    if empresa_email is not None:
-        filtros_existencia.append(Empresa.email == empresa_email)
-
-    empresa_existente = db.query(Empresa).filter(*filtros_existencia).first()
-
-    if empresa_existente:
-        raise HTTPException(status_code=400, detail="CNPJ ou E-mail já registados.")
-
-    pwd_hash = f"hashed_{empresa_in.senha}"
-
-    nova_empresa = Empresa(
-        prefeitura_id=empresa_in.prefeitura_id,
-        nome=empresa_in.nome,
-        cnpj=empresa_in.cnpj,
-        razao_social=empresa_in.razao_social,
-        nome_fantasia=empresa_in.nome_fantasia,
-        email=empresa_email,
-        telefone=empresa_in.telefone,
-        endereco=empresa_in.endereco,
-        pwd_hash=pwd_hash,
-        empresa_status=StatusVinculo.AGUARDANDO_VALIDACAO,
-    )
-
-    db.add(nova_empresa)
-    db.commit()
-    db.refresh(nova_empresa)
-
-    return nova_empresa
+    return auth_service.register_company(db=db, dados=empresa_in)
 
 
 @router.patch("/{empresa_id}/status", response_model=EmpresaResponse)
@@ -64,7 +36,7 @@ def validar_vinculo_empresa(
     db: Annotated[Session, Depends(get_db)],
 ):
     """
-    Endpoint para o Gestor de Resíduos aprovar ou recusar o vínculo
+    Endpoint para o Gestor da prefeitura aprovar ou recusar o vínculo
     de uma empresa (HU003).
     Se for recusada, o motivo passa a ser obrigatório.
     """

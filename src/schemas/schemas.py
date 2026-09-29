@@ -101,12 +101,12 @@ class UsuarioEmpresaResponse(UsuarioEmpresaBase, TimestampSchemaMixin):
 
 
 class EmpresaBase(BaseModel):
-    nome: str
     cnpj: str
-    razao_social: str
-    nome_fantasia: str
-    telefone: str
-    endereco: str
+    email: EmailStr
+    razao_social: str | None = None
+    nome_fantasia: str | None = None
+    telefone: str | None = None
+    endereco: str | None = None
 
 
 class EmpresaCreate(EmpresaBase):
@@ -115,7 +115,7 @@ class EmpresaCreate(EmpresaBase):
 
 
 class EmpresaUpdate(BaseModel):
-    nome: str | None = None
+    email: EmailStr | None = None
     razao_social: str | None = None
     nome_fantasia: str | None = None
     telefone: str | None = None
@@ -123,9 +123,15 @@ class EmpresaUpdate(BaseModel):
     empresa_status: StatusVinculo | None = None
 
 
-class EmpresaResponse(EmpresaBase, TimestampSchemaMixin):
+class EmpresaResponse(TimestampSchemaMixin):
     id: str
     prefeitura_id: str
+    cnpj: str
+    email: EmailStr
+    razao_social: str
+    nome_fantasia: str | None = None
+    telefone: str | None = None
+    endereco: str | None = None
     empresa_status: StatusVinculo
 
     model_config = ConfigDict(from_attributes=True)
@@ -172,3 +178,29 @@ class EmpresaComUsuariosResponse(EmpresaResponse):
     usuarios: list[UsuarioEmpresaResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    senha: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_type: str
+    user_id: str
+    email: str
+    nome: str
+    prefeitura_id: str | None = None
+    status_vinculo: StatusVinculo | None = None
+
+
+class CurrentUserResponse(BaseModel):
+    id: str
+    email: str
+    nome: str
+    user_type: str
+    is_superuser: bool
+    prefeitura_id: str | None = None
+    status_vinculo: StatusVinculo | None = None

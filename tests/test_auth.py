@@ -200,7 +200,15 @@ def test_login_nonexistent_email(client: TestClient):
     assert response.json()["detail"] == "Credenciais inválidas."
 
 
+def auth_headers(
+    client: TestClient, email: str, senha: str = "demo123"
+) -> dict[str, str]:
+    resposta = client.post("/auth/login", json={"email": email, "senha": senha})
+    return {"Authorization": f"Bearer {resposta.json()['access_token']}"}
+
+
 def test_login_company_confirmation_and_approval_flow(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
     dados = {
         "cnpj": "22222222000122",
         "email": "fluxo@teste.com",
@@ -215,7 +223,8 @@ def test_login_company_confirmation_and_approval_flow(client: TestClient):
     assert response.json()["detail"]["codigo"] == "EMAIL_NAO_CONFIRMADO"
 
     aprovar = {"novo_status": "APROVADA"}
-    response = client.patch(f"/empresas/{empresa_id}/status", json=aprovar)
+    url_status = f"/empresas/{empresa_id}/status"
+    response = client.patch(url_status, json=aprovar, headers=prefeitura)
     assert response.status_code == 400
 
     db = TestingSessionLocal()
@@ -233,7 +242,7 @@ def test_login_company_confirmation_and_approval_flow(client: TestClient):
     assert response.status_code == 403
     assert response.json()["detail"]["codigo"] == "CADASTRO_PENDENTE"
 
-    response = client.patch(f"/empresas/{empresa_id}/status", json=aprovar)
+    response = client.patch(url_status, json=aprovar, headers=prefeitura)
     assert response.status_code == 200
 
     response = client.post("/auth/login", json=login)
@@ -252,6 +261,7 @@ def test_login_refused_company_shows_reason(client: TestClient):
     client.patch(
         f"/empresas/{empresa_id}/status",
         json={"novo_status": "RECUSADA", "motivo_recusa": "CNPJ fora da região"},
+        headers=auth_headers(client, "gestor@demo.com"),
     )
 
     response = client.post(
@@ -373,6 +383,124 @@ def test_permission_superuser_route(client: TestClient):
     assert (
         resp_empresa.json()["detail"] == "Acesso restrito à Prefeitura (Superusuário)."
     )
+
+
+NOVO_REGISTRO = {
+    "material_id": "papel",
+    "periodo": "2026-09",
+    "volume_total": 10.0,
+    "percentual_reciclado": 50.0,
+}
+
+
+def test_protected_routes_require_authentication(client: TestClient):
+    assert client.get("/registros/").status_code == 401
+    assert client.post("/registros/", json=NOVO_REGISTRO).status_code == 401
+    assert client.get("/materiais/").status_code == 401
+    assert client.get("/empresas/").status_code == 401
+    aprovar = {"novo_status": "APROVADA"}
+    resposta = client.patch("/empresas/empresa-demo/status", json=aprovar)
+    assert resposta.status_code == 401
+
+
+def test_company_creates_and_sees_only_own_records(client: TestClient):
+    empresa = auth_headers(client, "empresa@demo.com")
+    outra_empresa = auth_headers(client, "empresa2@demo.com")
+
+    corpo = {**NOVO_REGISTRO, "empresa_id": "empresa-quixeramobim"}
+    criado = client.post("/registros/", json=corpo, headers=empresa)
+    assert criado.status_code == 201
+    assert criado.json()["empresa_id"] == "empresa-demo"
+
+    proprios = client.get("/registros/", headers=empresa).json()
+    assert proprios
+    assert {r["empresa_id"] for r in proprios} == {"empresa-demo"}
+
+    alheios = client.get(
+        "/registros/", params={"empresa_id": "empresa-demo"}, headers=outra_empresa
+    ).json()
+    assert alheios == []
+
+
+def test_prefeitura_cannot_create_records(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    resposta = client.post("/registros/", json=NOVO_REGISTRO, headers=prefeitura)
+    assert resposta.status_code == 403
+
+
+def test_prefeitura_sees_only_records_from_own_city(client: TestClient):
+    empresa_quixeramobim = auth_headers(client, "empresa2@demo.com")
+    registro_id = client.post(
+        "/registros/", json=NOVO_REGISTRO, headers=empresa_quixeramobim
+    ).json()["id"]
+
+    quixada = auth_headers(client, "gestor@demo.com")
+    vistos_quixada = client.get("/registros/", headers=quixada).json()
+    assert registro_id not in {r["id"] for r in vistos_quixada}
+    assert "empresa-quixeramobim" not in {r["empresa_id"] for r in vistos_quixada}
+
+    quixeramobim = auth_headers(client, "gestor2@demo.com")
+    vistos_quixeramobim = client.get("/registros/", headers=quixeramobim).json()
+    assert registro_id in {r["id"] for r in vistos_quixeramobim}
+
+
+def test_validation_restricted_to_prefeitura_of_same_city(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("src.services.services.obter_cotacao_dolar", lambda: 5.0)
+
+    empresa_quixeramobim = auth_headers(client, "empresa2@demo.com")
+    registro_id = client.post(
+        "/registros/", json=NOVO_REGISTRO, headers=empresa_quixeramobim
+    ).json()["id"]
+    url = f"/registros/{registro_id}/validar"
+    corpo = {"volume_validado": 8.0, "validador_id": "gestor-demo"}
+
+    resposta = client.patch(url, json=corpo, headers=empresa_quixeramobim)
+    assert resposta.status_code == 403
+
+    quixada = auth_headers(client, "gestor@demo.com")
+    resposta = client.patch(url, json=corpo, headers=quixada)
+    assert resposta.status_code == 404
+
+    quixeramobim = auth_headers(client, "gestor2@demo.com")
+    resposta = client.patch(url, json=corpo, headers=quixeramobim)
+    assert resposta.status_code == 200
+    assert resposta.json()["status_validacao"] == "VALIDADO"
+    assert resposta.json()["validador_id"] == "gestor-quixeramobim"
+
+
+def test_material_creation_restricted_to_prefeitura(client: TestClient):
+    material = {"categoria": "Madeira", "fator_emissaoipcc": 1.0}
+
+    empresa = auth_headers(client, "empresa@demo.com")
+    assert client.post("/materiais/", json=material, headers=empresa).status_code == 403
+
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    resposta = client.post("/materiais/", json=material, headers=prefeitura)
+    assert resposta.status_code == 201
+
+
+def test_linked_companies_listing_restricted_to_own_city(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    resposta = client.get("/empresas/", headers=prefeitura)
+    assert resposta.status_code == 200
+    empresas = resposta.json()
+    assert "empresa-demo" in {e["id"] for e in empresas}
+    assert {e["prefeitura_id"] for e in empresas} == {"prefeitura-quixada"}
+
+    empresa = auth_headers(client, "empresa@demo.com")
+    assert client.get("/empresas/", headers=empresa).status_code == 403
+
+
+def test_prefeitura_cannot_change_company_from_other_city(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    resposta = client.patch(
+        "/empresas/empresa-quixeramobim/status",
+        json={"novo_status": "RECUSADA", "motivo_recusa": "Fora do município"},
+        headers=prefeitura,
+    )
+    assert resposta.status_code == 404
 
 
 # ============================================================================

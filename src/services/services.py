@@ -2,7 +2,7 @@ import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from src.models.models import Material, Registro
+from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao
 
 VALOR_TONELADA_CO2_USD = 5.0
@@ -20,10 +20,20 @@ def obter_cotacao_dolar() -> float:
 
 class RegistroService:
     def validar_e_calcular(
-        self, db: Session, registro_id: str, validador_id: str, volume_validado: float
+        self,
+        db: Session,
+        registro_id: str,
+        validador_id: str,
+        volume_validado: float,
+        prefeitura_id: str,
     ) -> Registro:
 
-        registro = db.query(Registro).filter(Registro.id == registro_id).first()
+        registro = (
+            db.query(Registro)
+            .join(Registro.empresa)
+            .filter(Registro.id == registro_id, Empresa.prefeitura_id == prefeitura_id)
+            .first()
+        )
         if not registro:
             raise HTTPException(status_code=404, detail="Registro não encontrado")
 

@@ -1,10 +1,11 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
+from src.core.security import require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import EmpresaCreate, EmpresaResponse
@@ -29,18 +30,42 @@ def autocadastro_empresa(
     return auth_service.register_company(db=db, dados=empresa_in)
 
 
+@router.get("/", response_model=list[EmpresaResponse])
+def listar_empresas_vinculadas(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+    empresa_status: StatusVinculo | None = None,
+):
+    """
+    Lista as empresas vinculadas ao município da prefeitura autenticada (HU008).
+    Pode ser filtrado por empresa_status.
+    """
+    query = db.query(Empresa).filter(Empresa.prefeitura_id == usuario["prefeitura_id"])
+    if empresa_status:
+        query = query.filter(Empresa.empresa_status == empresa_status)
+    return query.order_by(Empresa.created_at.desc()).all()
+
+
 @router.patch("/{empresa_id}/status", response_model=EmpresaResponse)
 def validar_vinculo_empresa(
     empresa_id: str,
     dados_status: AtualizarStatusEmpresa,
     db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
     Endpoint para o Gestor da prefeitura aprovar ou recusar o vínculo
-    de uma empresa (HU003).
+    de uma empresa do seu município (HU003).
     Se for recusada, o motivo passa a ser obrigatório.
     """
-    empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
+    empresa = (
+        db.query(Empresa)
+        .filter(
+            Empresa.id == empresa_id,
+            Empresa.prefeitura_id == usuario["prefeitura_id"],
+        )
+        .first()
+    )
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 

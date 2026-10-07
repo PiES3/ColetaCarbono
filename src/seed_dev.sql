@@ -1,4 +1,5 @@
 INSERT OR IGNORE INTO prefeituras (id, nome) VALUES ('prefeitura-quixada', 'Quixadá');
+INSERT OR IGNORE INTO prefeituras (id, nome) VALUES ('prefeitura-quixeramobim', 'Quixeramobim');
 
 INSERT OR IGNORE INTO materiais (id, categoria, fator_emissaoipcc) VALUES
     ('papel', 'Papel', 1.0),
@@ -10,6 +11,13 @@ INSERT OR IGNORE INTO empresas (id, prefeitura_id, cnpj, razao_social, nome_fant
 VALUES ('empresa-demo', 'prefeitura-quixada', '00000000000100', 'Empresa Demo LTDA', 'Empresa Demo',
         'empresa@demo.com', '$2b$12$EewUZscvfTEMpkYELJXRruH5oYa4ztKO8qr7K34pqpwlQgUbGLCwG', 'APROVADA');
 
+INSERT OR IGNORE INTO empresas (id, prefeitura_id, cnpj, razao_social, nome_fantasia, email, pwd_hash, empresa_status)
+VALUES ('empresa-quixeramobim', 'prefeitura-quixeramobim', '00000000000200', 'Recicla Quixeramobim LTDA', 'Recicla Quixeramobim',
+        'empresa2@demo.com', '$2b$12$EewUZscvfTEMpkYELJXRruH5oYa4ztKO8qr7K34pqpwlQgUbGLCwG', 'APROVADA');
+
 INSERT OR IGNORE INTO usuarios_admin (id, id_prefeitura, nome, email, senha_hash, perfil)
 VALUES ('gestor-demo', 'prefeitura-quixada', 'Gestor Demo', 'gestor@demo.com', '$2b$12$EewUZscvfTEMpkYELJXRruH5oYa4ztKO8qr7K34pqpwlQgUbGLCwG', 'GESTOR');
+
+INSERT OR IGNORE INTO usuarios_admin (id, id_prefeitura, nome, email, senha_hash, perfil)
+VALUES ('gestor-quixeramobim', 'prefeitura-quixeramobim', 'Gestor Quixeramobim', 'gestor2@demo.com', '$2b$12$EewUZscvfTEMpkYELJXRruH5oYa4ztKO8qr7K34pqpwlQgUbGLCwG', 'GESTOR');
 

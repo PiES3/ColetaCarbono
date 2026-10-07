@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.models.models import Empresa, UsuarioAdmin, UsuarioEmpresa
+from src.schemas.enums import StatusVinculo
 
 SECRET_KEY = os.getenv(
     "SECRET_KEY", "coleta-carbono-secret-key-super-secure-at-least-32-chars-long"
@@ -195,6 +196,7 @@ def get_current_user(
             "nome": empresa.nome_fantasia or empresa.razao_social,
             "user_type": "EMPRESA",
             "is_superuser": False,
+            "empresa_id": empresa.id,
             "prefeitura_id": empresa.prefeitura_id,
             "status_vinculo": empresa.empresa_status,
             "instance": empresa,
@@ -226,7 +228,8 @@ def get_current_user(
             "user_type": "USUARIO_EMPRESA",
             "is_superuser": False,
             "empresa_id": user_empresa.id_empresa,
-            "status_vinculo": None,
+            "prefeitura_id": user_empresa.empresa.prefeitura_id,
+            "status_vinculo": user_empresa.empresa.empresa_status,
             "instance": user_empresa,
         }
 
@@ -252,10 +255,15 @@ def require_superuser(
 def require_empresa(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Exige que o usuário autenticado seja uma Empresa."""
-    if current_user.get("user_type") != "EMPRESA":
+    """Exige que o usuário autenticado seja de uma Empresa com vínculo aprovado."""
+    if current_user.get("user_type") not in ("EMPRESA", "USUARIO_EMPRESA"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acesso restrito a Empresas.",
+        )
+    if current_user.get("status_vinculo") != StatusVinculo.APROVADA:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="O vínculo da empresa com a prefeitura não está aprovado.",
         )
     return current_user

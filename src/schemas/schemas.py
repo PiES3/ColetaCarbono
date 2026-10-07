@@ -144,7 +144,6 @@ class RegistroBase(BaseModel):
 
 
 class RegistroCreate(RegistroBase):
-    empresa_id: str
     material_id: str
 
 

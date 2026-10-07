@@ -9,7 +9,10 @@ from src.schemas.schemas import (
     CurrentUserResponse,
     EmpresaCreate,
     EmpresaResponse,
+    ForgotPasswordRequest,
     LoginRequest,
+    MessageResponse,
+    ResetPasswordRequest,
     TokenResponse,
 )
 from src.services.auth_service import auth_service
@@ -68,4 +71,41 @@ def obter_usuario_atual(
         is_superuser=current_user["is_superuser"],
         prefeitura_id=current_user.get("prefeitura_id"),
         status_vinculo=current_user.get("status_vinculo"),
+    )
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Solicitar redefinição de senha",
+)
+def solicitar_redefinicao_senha(
+    dados: ForgotPasswordRequest, db: Annotated[Session, Depends(get_db)]
+):
+    """
+    Inicia o fluxo de recuperação de senha gerando um token e enviando por e-mail.
+    Por segurança, retorna a mesma mensagem de confirmação para e-mails cadastrados
+    e não cadastrados, prevenindo a enumeração de contas.
+    """
+    return auth_service.request_password_reset(db=db, email=dados.email)
+
+
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Redefinir senha com token",
+)
+def redefinir_senha(
+    dados: ResetPasswordRequest, db: Annotated[Session, Depends(get_db)]
+):
+    """
+    Redefine a senha do usuário utilizando o token de recuperação.
+    - Exige que a nova senha atenda à política de complexidade mínima do projeto.
+    - O token é de uso único e expira dentro do prazo definido.
+    - Todas as sessões anteriores ativas são invalidadas após o reset.
+    """
+    return auth_service.reset_password(
+        db=db, token=dados.token, nova_senha=dados.nova_senha
     )

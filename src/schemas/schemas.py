@@ -204,3 +204,16 @@ class CurrentUserResponse(BaseModel):
     is_superuser: bool
     prefeitura_id: str | None = None
     status_vinculo: StatusVinculo | None = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    nova_senha: str
+
+
+class MessageResponse(BaseModel):
+    message: str

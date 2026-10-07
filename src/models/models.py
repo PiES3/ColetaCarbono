@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -126,3 +126,13 @@ class UsuarioEmpresa(Base, TimestampMixin):
     perfil: Mapped[Perfil] = mapped_column(SQLEnum(Perfil), default=Perfil.COMUM)
 
     empresa: Mapped[Empresa] = relationship(back_populates="usuarios")
+
+
+class TokenRedefinicaoSenha(Base, TimestampMixin):
+    __tablename__ = "tokens_redefinicao_senha"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    expiracao: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    utilizado: Mapped[bool] = mapped_column(Boolean, default=False)

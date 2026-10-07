@@ -1,4 +1,6 @@
+import hashlib
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -9,15 +11,60 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
-from src.models.models import Empresa, UsuarioAdmin
+from src.models.models import Empresa, UsuarioAdmin, UsuarioEmpresa
 
 SECRET_KEY = os.getenv(
     "SECRET_KEY", "coleta-carbono-secret-key-super-secure-at-least-32-chars-long"
 )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
+RESET_TOKEN_EXPIRE_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRE_MINUTES", "15"))
 
 http_bearer = HTTPBearer(auto_error=False)
+
+
+def get_password_hash_signature(hashed_password: str) -> str:
+    """Gera uma assinatura curta e segura a partir do hash da senha."""
+    return hashlib.sha256(hashed_password.encode("utf-8")).hexdigest()[:16]
+
+
+def validate_password_complexity(password: str) -> None:
+    """
+    Valida os requisitos mínimos de complexidade para a nova senha:
+    - No mínimo 8 caracteres
+    - Pelo menos uma letra maiúscula
+    - Pelo menos uma letra minúscula
+    - Pelo menos um dígito numérico
+    - Pelo menos um caractere especial (!@#$%^&* etc.)
+    """
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A nova senha deve ter no mínimo 8 caracteres.",
+        )
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A nova senha deve conter pelo menos uma letra maiúscula.",
+        )
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A nova senha deve conter pelo menos uma letra minúscula.",
+        )
+    if not re.search(r"\d", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A nova senha deve conter pelo menos um número.",
+        )
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>\-_+=\[\]\\/`~]", password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "A nova senha deve conter pelo menos um caractere especial "
+                "(!@#$%^&* etc.)."
+            ),
+        )
 
 
 def hash_password(password: str) -> str:
@@ -94,12 +141,23 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    token_sig = payload.get("pwd_sig")
+
     if user_type == "PREFEITURA":
         admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.id == user_id).first()
         if not admin:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Administrador da prefeitura não encontrado.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        current_sig = get_password_hash_signature(admin.senha_hash)
+        if not token_sig or token_sig != current_sig:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Sessão invalidada após alteração de senha. Faça login novamente."
+                ),
                 headers={"WWW-Authenticate": "Bearer"},
             )
         return {
@@ -121,6 +179,15 @@ def get_current_user(
                 detail="Empresa não encontrada.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        current_sig = get_password_hash_signature(empresa.pwd_hash)
+        if not token_sig or token_sig != current_sig:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Sessão invalidada após alteração de senha. Faça login novamente."
+                ),
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return {
             "id": empresa.id,
             "email": empresa.email,
@@ -130,6 +197,36 @@ def get_current_user(
             "prefeitura_id": empresa.prefeitura_id,
             "status_vinculo": empresa.empresa_status,
             "instance": empresa,
+        }
+
+    if user_type == "USUARIO_EMPRESA":
+        user_empresa = (
+            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.id == user_id).first()
+        )
+        if not user_empresa:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Usuário da empresa não encontrado.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        current_sig = get_password_hash_signature(user_empresa.senha_hash)
+        if not token_sig or token_sig != current_sig:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Sessão invalidada após alteração de senha. Faça login novamente."
+                ),
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return {
+            "id": user_empresa.id,
+            "email": user_empresa.email,
+            "nome": user_empresa.nome,
+            "user_type": "USUARIO_EMPRESA",
+            "is_superuser": False,
+            "empresa_id": user_empresa.id_empresa,
+            "status_vinculo": None,
+            "instance": user_empresa,
         }
 
     raise HTTPException(

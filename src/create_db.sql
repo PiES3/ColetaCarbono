@@ -87,3 +87,14 @@ CREATE TABLE IF NOT EXISTS registros (
     FOREIGN KEY (validador_id) REFERENCES usuarios_admin(id),
     FOREIGN KEY (criado_por_gestor_id) REFERENCES usuarios_admin(id)
 );
+
+CREATE TABLE IF NOT EXISTS tokens_redefinicao_senha (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    expiracao DATETIME NOT NULL,
+    utilizado BOOLEAN DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME
+);

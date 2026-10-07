@@ -42,6 +42,7 @@ class Empresa(Base, TimestampMixin):
         SQLEnum(StatusVinculo), default=StatusVinculo.AGUARDANDO_VALIDACAO
     )
     motivo_recusa: Mapped[str | None] = mapped_column(String, nullable=True)
+    email_confirmado: Mapped[bool] = mapped_column(Boolean, default=False)
     token_confirmacao_email: Mapped[str | None] = mapped_column(String, nullable=True)
     token_expiracao: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

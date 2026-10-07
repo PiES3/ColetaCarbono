@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.app import app
 from src.core.database import get_db
 from src.core.security import require_superuser
-from src.models.models import TokenRedefinicaoSenha
+from src.models.models import Empresa, TokenRedefinicaoSenha
 
 TEST_DATABASE_URL = "sqlite:///./test_carbono.db"
 test_engine = create_engine(
@@ -198,6 +198,102 @@ def test_login_nonexistent_email(client: TestClient):
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "Credenciais inválidas."
+
+
+def test_login_company_confirmation_and_approval_flow(client: TestClient):
+    dados = {
+        "cnpj": "22222222000122",
+        "email": "fluxo@teste.com",
+        "senha": "password123",
+        "prefeitura_id": "prefeitura-quixada",
+    }
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    login = {"email": dados["email"], "senha": dados["senha"]}
+
+    response = client.post("/auth/login", json=login)
+    assert response.status_code == 403
+    assert response.json()["detail"]["codigo"] == "EMAIL_NAO_CONFIRMADO"
+
+    aprovar = {"novo_status": "APROVADA"}
+    response = client.patch(f"/empresas/{empresa_id}/status", json=aprovar)
+    assert response.status_code == 400
+
+    db = TestingSessionLocal()
+    empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
+    token = empresa.token_confirmacao_email
+    db.close()
+
+    response = client.get("/auth/confirm-email", params={"token": token})
+    assert response.status_code == 200
+
+    response = client.get("/auth/confirm-email", params={"token": token})
+    assert response.status_code == 400
+
+    response = client.post("/auth/login", json=login)
+    assert response.status_code == 403
+    assert response.json()["detail"]["codigo"] == "CADASTRO_PENDENTE"
+
+    response = client.patch(f"/empresas/{empresa_id}/status", json=aprovar)
+    assert response.status_code == 200
+
+    response = client.post("/auth/login", json=login)
+    assert response.status_code == 200
+    assert response.json()["status_vinculo"] == "APROVADA"
+
+
+def test_login_refused_company_shows_reason(client: TestClient):
+    dados = {
+        "cnpj": "44444444000144",
+        "email": "recusada@teste.com",
+        "senha": "password123",
+        "prefeitura_id": "prefeitura-quixada",
+    }
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    client.patch(
+        f"/empresas/{empresa_id}/status",
+        json={"novo_status": "RECUSADA", "motivo_recusa": "CNPJ fora da região"},
+    )
+
+    response = client.post(
+        "/auth/login", json={"email": dados["email"], "senha": dados["senha"]}
+    )
+    assert response.status_code == 403
+    detalhe = response.json()["detail"]
+    assert detalhe["codigo"] == "CADASTRO_RECUSADO"
+    assert "CNPJ fora da região" in detalhe["mensagem"]
+
+
+def test_login_wrong_password_on_pending_company_stays_generic(client: TestClient):
+    dados = {
+        "cnpj": "33333333000133",
+        "email": "pendente_senha@teste.com",
+        "senha": "password123",
+        "prefeitura_id": "prefeitura-quixada",
+    }
+    client.post("/auth/register", json=dados)
+
+    response = client.post(
+        "/auth/login", json={"email": dados["email"], "senha": "outra_senha"}
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Credenciais inválidas."
+
+
+def test_resend_confirmation_same_message(client: TestClient):
+    dados = {
+        "cnpj": "55555555000155",
+        "email": "reenvio@teste.com",
+        "senha": "password123",
+        "prefeitura_id": "prefeitura-quixada",
+    }
+    client.post("/auth/register", json=dados)
+
+    existente = client.post("/auth/resend-confirmation", json={"email": dados["email"]})
+    inexistente = client.post(
+        "/auth/resend-confirmation", json={"email": "ninguem@teste.com"}
+    )
+    assert existente.status_code == inexistente.status_code == 200
+    assert existente.json() == inexistente.json()
 
 
 # ============================================================================

@@ -45,6 +45,14 @@ def validar_vinculo_empresa(
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 
     if (
+        dados_status.novo_status == StatusVinculo.APROVADA
+        and not empresa.email_confirmado
+    ):
+        raise HTTPException(
+            status_code=400, detail="A empresa ainda não confirmou o e-mail."
+        )
+
+    if (
         dados_status.novo_status == StatusVinculo.RECUSADA
         and not dados_status.motivo_recusa
     ):

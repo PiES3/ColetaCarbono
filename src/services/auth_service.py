@@ -6,6 +6,7 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from src.core.security import (
+    CONFIRM_TOKEN_EXPIRE_MINUTES,
     RESET_TOKEN_EXPIRE_MINUTES,
     create_access_token,
     get_password_hash_signature,
@@ -83,6 +84,7 @@ class AuthService:
             pwd_hash=hash_password(dados.senha),
             empresa_status=StatusVinculo.AGUARDANDO_VALIDACAO,
         )
+        self._gerar_token_confirmacao(nova_empresa)
 
         db.add(nova_empresa)
         db.commit()
@@ -122,6 +124,7 @@ class AuthService:
         # 2. Verifica se é uma Empresa
         empresa = db.query(Empresa).filter(Empresa.email == email).first()
         if empresa and verify_password(senha, empresa.pwd_hash):
+            self._barrar_empresa_nao_liberada(empresa)
             token_payload = {
                 "sub": empresa.id,
                 "email": empresa.email,
@@ -153,6 +156,7 @@ class AuthService:
             db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == email).first()
         )
         if user_empresa and verify_password(senha, user_empresa.senha_hash):
+            self._barrar_empresa_nao_liberada(user_empresa.empresa)
             token_payload = {
                 "sub": user_empresa.id,
                 "email": user_empresa.email,
@@ -309,6 +313,102 @@ class AuthService:
                 "encerradas. Faça login com a nova senha."
             )
         }
+
+    def confirm_email(self, db: Session, token: str) -> dict[str, str]:
+        """
+        Confirma o e-mail da empresa pelo token enviado no cadastro.
+        Depois disso, o cadastro entra na fila de aprovação do gestor.
+        """
+        empresa = (
+            db.query(Empresa).filter(Empresa.token_confirmacao_email == token).first()
+        )
+        if not empresa:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Link de confirmação inválido ou já utilizado.",
+            )
+
+        expiracao = empresa.token_expiracao
+        if expiracao and expiracao.tzinfo is None:
+            expiracao = expiracao.replace(tzinfo=UTC)
+        if not expiracao or datetime.now(UTC) > expiracao:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Link de confirmação expirado. Peça um novo no aplicativo.",
+            )
+
+        empresa.email_confirmado = True
+        empresa.token_confirmacao_email = None
+        empresa.token_expiracao = None
+        db.commit()
+
+        return {
+            "message": (
+                "E-mail confirmado. Agora a prefeitura vai analisar seu cadastro."
+            )
+        }
+
+    def resend_confirmation(self, db: Session, email: str) -> dict[str, str]:
+        """
+        Gera um novo token de confirmação de e-mail.
+        A mensagem é sempre a mesma, para não revelar quais e-mails têm cadastro.
+        """
+        empresa = db.query(Empresa).filter(Empresa.email == email).first()
+        if (
+            empresa
+            and not empresa.email_confirmado
+            and empresa.empresa_status == StatusVinculo.AGUARDANDO_VALIDACAO
+        ):
+            self._gerar_token_confirmacao(empresa)
+            db.commit()
+
+        return {
+            "message": (
+                "Se houver um cadastro aguardando confirmação, enviamos um novo link."
+            )
+        }
+
+    def _gerar_token_confirmacao(self, empresa: Empresa) -> None:
+        empresa.token_confirmacao_email = secrets.token_urlsafe(32)
+        empresa.token_expiracao = datetime.now(UTC) + timedelta(
+            minutes=CONFIRM_TOKEN_EXPIRE_MINUTES
+        )
+        logger.info(
+            f"[EmailService] Enviando confirmação de e-mail para: {empresa.email} "
+            f"| Token: {empresa.token_confirmacao_email}"
+        )
+
+    def _barrar_empresa_nao_liberada(self, empresa: Empresa) -> None:
+        if empresa.empresa_status == StatusVinculo.APROVADA:
+            return
+
+        prefeitura = f"Prefeitura de {empresa.prefeitura.nome}"
+
+        if empresa.empresa_status == StatusVinculo.AGUARDANDO_VALIDACAO:
+            if not empresa.email_confirmado:
+                codigo = "EMAIL_NAO_CONFIRMADO"
+                mensagem = (
+                    f"Enviamos um link para {empresa.email}. Depois de confirmar, "
+                    f"a {prefeitura} analisa seu cadastro."
+                )
+            else:
+                codigo = "CADASTRO_PENDENTE"
+                mensagem = (
+                    f"Seu e-mail já foi confirmado. Falta a {prefeitura} aprovar "
+                    "o vínculo da sua empresa. Avisaremos por e-mail."
+                )
+        elif empresa.empresa_status == StatusVinculo.RECUSADA:
+            codigo = "CADASTRO_RECUSADO"
+            motivo = empresa.motivo_recusa or "não informado"
+            mensagem = f"A {prefeitura} recusou o vínculo. Motivo: {motivo}"
+        else:
+            codigo = "CADASTRO_DESASSOCIADO"
+            mensagem = f"Sua empresa não está mais vinculada à {prefeitura}."
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"codigo": codigo, "mensagem": mensagem},
+        )
 
 
 auth_service = AuthService()

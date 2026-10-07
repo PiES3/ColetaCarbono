@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.core.security import get_current_user
 from src.schemas.schemas import (
+    ConfirmacaoEmailRequest,
     CurrentUserResponse,
     EmpresaCreate,
     EmpresaResponse,
@@ -109,3 +110,31 @@ def redefinir_senha(
     return auth_service.reset_password(
         db=db, token=dados.token, nova_senha=dados.nova_senha
     )
+
+
+@router.get(
+    "/confirm-email",
+    response_model=MessageResponse,
+    summary="Confirmar o e-mail da empresa",
+)
+def confirmar_email(token: str, db: Annotated[Session, Depends(get_db)]):
+    """
+    Confirma o e-mail pelo link enviado no cadastro. Depois disso, o cadastro
+    entra na fila de aprovação do gestor da prefeitura.
+    """
+    return auth_service.confirm_email(db=db, token=token)
+
+
+@router.post(
+    "/resend-confirmation",
+    response_model=MessageResponse,
+    summary="Reenviar o link de confirmação de e-mail",
+)
+def reenviar_confirmacao(
+    dados: ConfirmacaoEmailRequest, db: Annotated[Session, Depends(get_db)]
+):
+    """
+    Gera um novo link de confirmação. A resposta é sempre a mesma,
+    para não revelar quais e-mails têm cadastro.
+    """
+    return auth_service.resend_confirmation(db=db, email=dados.email)

@@ -210,6 +210,10 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class ConfirmacaoEmailRequest(BaseModel):
+    email: EmailStr
+
+
 class ResetPasswordRequest(BaseModel):
     token: str
     nova_senha: str

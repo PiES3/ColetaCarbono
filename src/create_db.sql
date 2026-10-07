@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS empresas (
     empresa_status TEXT DEFAULT 'AGUARDANDO_VALIDACAO' 
         CHECK(empresa_status IN ('AGUARDANDO_VALIDACAO', 'APROVADA', 'RECUSADA', 'DESASSOCIADA')),
     motivo_recusa TEXT,
+    email_confirmado INTEGER NOT NULL DEFAULT 0,
     token_confirmacao_email TEXT,
     token_expiracao DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

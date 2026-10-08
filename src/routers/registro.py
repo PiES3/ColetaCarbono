@@ -1,14 +1,15 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Query, Session
 
 from src.core.database import get_db
 from src.core.security import get_current_user, require_empresa, require_superuser
-from src.models.models import Empresa, Registro
+from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao
 from src.schemas.schemas import RegistroCreate, RegistroResponse
+from src.schemas.validacao import validar_volume
 from src.services.services import registro_service
 
 router = APIRouter(prefix="/registros", tags=["Registros"])
@@ -16,6 +17,11 @@ router = APIRouter(prefix="/registros", tags=["Registros"])
 
 class ValidacaoRequest(BaseModel):
     volume_validado: float
+
+    @field_validator("volume_validado")
+    @classmethod
+    def checar_volume(cls, valor: float) -> float:
+        return validar_volume(valor)
 
 
 def registros_visiveis(db: Session, usuario: dict[str, Any]) -> Query:
@@ -40,6 +46,11 @@ def criar_registro(
     Recebe um novo registro da empresa autenticada
     (geralmente enviado pelo app mobile via sincronização).
     """
+    if not db.query(Material).filter(Material.id == registro_in.material_id).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Material inválido."
+        )
+
     novo_registro = Registro(
         empresa_id=usuario["empresa_id"],
         material_id=registro_in.material_id,

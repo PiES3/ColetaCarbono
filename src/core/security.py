@@ -30,9 +30,10 @@ def get_password_hash_signature(hashed_password: str) -> str:
     return hashlib.sha256(hashed_password.encode("utf-8")).hexdigest()[:16]
 
 
-def validate_password_complexity(password: str) -> None:
+def validate_password_complexity(password: str, rotulo: str = "A nova senha") -> None:
     """
-    Valida os requisitos mínimos de complexidade para a nova senha:
+    Valida os requisitos mínimos de complexidade da senha, no cadastro e na
+    redefinição:
     - No mínimo 8 caracteres
     - Pelo menos uma letra maiúscula
     - Pelo menos uma letra minúscula
@@ -42,28 +43,28 @@ def validate_password_complexity(password: str) -> None:
     if len(password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A nova senha deve ter no mínimo 8 caracteres.",
+            detail=f"{rotulo} deve ter no mínimo 8 caracteres.",
         )
     if not re.search(r"[A-Z]", password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A nova senha deve conter pelo menos uma letra maiúscula.",
+            detail=f"{rotulo} deve conter pelo menos uma letra maiúscula.",
         )
     if not re.search(r"[a-z]", password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A nova senha deve conter pelo menos uma letra minúscula.",
+            detail=f"{rotulo} deve conter pelo menos uma letra minúscula.",
         )
     if not re.search(r"\d", password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A nova senha deve conter pelo menos um número.",
+            detail=f"{rotulo} deve conter pelo menos um número.",
         )
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>\-_+=\[\]\\/`~]", password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "A nova senha deve conter pelo menos um caractere especial "
+                f"{rotulo} deve conter pelo menos um caractere especial "
                 "(!@#$%^&* etc.)."
             ),
         )

@@ -34,7 +34,10 @@ class AuthService:
         """
         Cadastra uma nova empresa vinculada a uma prefeitura existente.
         A empresa nasce com o status AGUARDANDO_VALIDACAO.
+        A senha segue a mesma política de complexidade da redefinição.
         """
+        validate_password_complexity(dados.senha, rotulo="A senha")
+
         # 1. Verifica se a prefeitura selecionada existe
         prefeitura = (
             db.query(Prefeitura).filter(Prefeitura.id == dados.prefeitura_id).first()

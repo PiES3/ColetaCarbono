@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from src.schemas.schemas import (
     EmpresaUpdate,
     HistoricoCadastroResponse,
 )
+from src.schemas.validacao import validar_motivo_recusa
 from src.services.auth_service import auth_service
 from src.services.empresa_service import empresa_service
 
@@ -24,6 +25,11 @@ router = APIRouter(prefix="/empresas", tags=["Empresas"])
 class AtualizarStatusEmpresa(BaseModel):
     novo_status: StatusVinculo
     motivo_recusa: str | None = None
+
+    @field_validator("motivo_recusa")
+    @classmethod
+    def checar_motivo_recusa(cls, valor: str | None) -> str | None:
+        return validar_motivo_recusa(valor)
 
 
 @router.post("/", response_model=EmpresaResponse, status_code=status.HTTP_201_CREATED)

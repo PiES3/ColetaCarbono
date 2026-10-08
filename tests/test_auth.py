@@ -90,7 +90,7 @@ def nova_empresa(cnpj: str, email: str, **extras: str) -> dict[str, str]:
     return {
         "cnpj": cnpj,
         "email": email,
-        "senha": "password123",
+        "senha": "Senha@123",
         "razao_social": f"Empresa {cnpj} LTDA",
         "prefeitura_id": "prefeitura-quixada",
         **extras,
@@ -194,6 +194,59 @@ def test_register_company_minimal_fields(client: TestClient):
     dados = response.json()
     assert dados["razao_social"] == payload["razao_social"]
     assert dados["nome_fantasia"] is None
+
+
+def mensagens(resposta) -> list[str]:
+    return [erro["msg"] for erro in resposta.json()["detail"]]
+
+
+def test_register_company_field_limits(client: TestClient):
+    casos = [
+        ({"razao_social": "AB"}, "A razão social deve ter entre 3 e 150 caracteres."),
+        (
+            {"razao_social": "A" * 151},
+            "A razão social deve ter entre 3 e 150 caracteres.",
+        ),
+        (
+            {"nome_fantasia": "N" * 101},
+            "O nome fantasia deve ter no máximo 100 caracteres.",
+        ),
+        ({"endereco": "R" * 201}, "O endereço deve ter no máximo 200 caracteres."),
+        ({"telefone": "8899"}, "Informe o telefone com DDD (10 ou 11 dígitos)."),
+    ]
+    for extras, mensagem in casos:
+        payload = nova_empresa("22334455000186", "limites@empresa.com", **extras)
+        resposta = client.post("/auth/register", json=payload)
+        assert resposta.status_code == 422
+        assert mensagem in mensagens(resposta)
+
+
+def test_register_company_normalizes_optional_fields(client: TestClient):
+    payload = nova_empresa(
+        "24681357000140",
+        "telefone@empresa.com",
+        telefone="(88) 99999-8888",
+        nome_fantasia="   ",
+        endereco="  Rua Basílio Pinto, 120  ",
+    )
+    resposta = client.post("/auth/register", json=payload)
+    assert resposta.status_code == status.HTTP_201_CREATED
+    dados = resposta.json()
+    assert dados["telefone"] == "88999998888"
+    assert dados["nome_fantasia"] is None
+    assert dados["endereco"] == "Rua Basílio Pinto, 120"
+
+
+def test_register_company_password_policy(client: TestClient):
+    payload = nova_empresa(
+        "22334455000186", "senha_fraca@empresa.com", senha="fraca123"
+    )
+    resposta = client.post("/auth/register", json=payload)
+    assert resposta.status_code == status.HTTP_400_BAD_REQUEST
+    assert (
+        resposta.json()["detail"]
+        == "A senha deve conter pelo menos uma letra maiúscula."
+    )
 
 
 # ============================================================================
@@ -626,7 +679,7 @@ def test_company_email_change_requires_confirmation(client: TestClient, db: Sess
     assert resposta.json()["email"] == "email_antigo@teste.com"
     assert resposta.json()["email_pendente"] == "email_novo@teste.com"
 
-    senha = "password123"
+    senha = "Senha@123"
     login_antigo = {"email": "email_antigo@teste.com", "senha": senha}
     login_novo = {"email": "email_novo@teste.com", "senha": senha}
     assert client.post("/auth/login", json=login_antigo).status_code == 200
@@ -664,7 +717,9 @@ def test_company_email_change_rejects_email_in_use(client: TestClient, db: Sessi
 def test_company_data_routes_restricted_to_companies(client: TestClient):
     prefeitura = auth_headers(client, "gestor2@demo.com")
     assert client.get("/empresas/me", headers=prefeitura).status_code == 403
-    resposta = client.patch("/empresas/me", json={"telefone": "1"}, headers=prefeitura)
+    resposta = client.patch(
+        "/empresas/me", json={"telefone": "88912345678"}, headers=prefeitura
+    )
     assert resposta.status_code == status.HTTP_403_FORBIDDEN
     assert client.get("/empresas/me").status_code == 401
 
@@ -685,6 +740,74 @@ def test_prefeitura_edit_follows_rules_and_records_author(client: TestClient):
     telefone = next(h for h in historico if h["campo"] == "telefone")
     assert telefone["autor_id"] == "gestor-quixeramobim"
     assert telefone["autor_nome"] == "Gestor Quixeramobim"
+
+
+# ============================================================================
+# Testes dos Parâmetros de Validação dos Campos
+# ============================================================================
+
+
+def test_company_edit_fields_are_validated(client: TestClient):
+    empresa = auth_headers(client, "empresa2@demo.com")
+    casos = [
+        ({"telefone": "123"}, "Informe o telefone com DDD (10 ou 11 dígitos)."),
+        ({"razao_social": "  "}, "Informe a razão social."),
+        ({"email": "sem-arroba"}, None),
+    ]
+    for corpo, mensagem in casos:
+        resposta = client.patch("/empresas/me", json=corpo, headers=empresa)
+        assert resposta.status_code == 422
+        if mensagem:
+            assert mensagem in mensagens(resposta)
+
+
+def test_record_fields_are_validated(client: TestClient):
+    empresa = auth_headers(client, "empresa2@demo.com")
+    casos = [
+        ({"periodo": "2026-13"}, "Informe o período no formato AAAA-MM."),
+        ({"periodo": "2999-01"}, "O período não pode estar no futuro."),
+        ({"volume_total": 0}, "O volume deve ser maior que zero."),
+        (
+            {"percentual_reciclado": 101},
+            "O percentual reciclado deve estar entre 0 e 100.",
+        ),
+    ]
+    for extras, mensagem in casos:
+        resposta = client.post(
+            "/registros/", json={**NOVO_REGISTRO, **extras}, headers=empresa
+        )
+        assert resposta.status_code == 422
+        assert mensagem in mensagens(resposta)
+
+    resposta = client.post(
+        "/registros/",
+        json={**NOVO_REGISTRO, "material_id": "inexistente"},
+        headers=empresa,
+    )
+    assert resposta.status_code == status.HTTP_400_BAD_REQUEST
+    assert resposta.json()["detail"] == "Material inválido."
+
+
+def test_validation_and_refusal_fields_are_validated(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+
+    resposta = client.patch(
+        "/registros/qualquer/validar",
+        json={"volume_validado": 0},
+        headers=prefeitura,
+    )
+    assert resposta.status_code == 422
+    assert "O volume deve ser maior que zero." in mensagens(resposta)
+
+    resposta = client.patch(
+        "/empresas/empresa-demo/status",
+        json={"novo_status": "RECUSADA", "motivo_recusa": "ruim"},
+        headers=prefeitura,
+    )
+    assert resposta.status_code == 422
+    assert "O motivo da recusa deve ter entre 5 e 500 caracteres." in mensagens(
+        resposta
+    )
 
 
 # ============================================================================

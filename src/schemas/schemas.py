@@ -1,4 +1,3 @@
-import re
 from datetime import datetime
 
 from pydantic import (
@@ -9,37 +8,18 @@ from pydantic import (
     Field,
     field_validator,
 )
-from pydantic_core import PydanticCustomError
 
 from src.schemas.enums import Perfil, StatusValidacao, StatusVinculo
-
-PESOS_CNPJ = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
-
-
-def digito_verificador_cnpj(digitos: str) -> str:
-    pesos = PESOS_CNPJ[-len(digitos) :]
-    resto = sum(int(d) * p for d, p in zip(digitos, pesos, strict=True)) % 11
-    return "0" if resto < 2 else str(11 - resto)
-
-
-def normalizar_cnpj(valor: str) -> str:
-    digitos = re.sub(r"\D", "", valor)
-    if len(digitos) != 14 or len(set(digitos)) == 1:
-        raise PydanticCustomError("cnpj_invalido", "CNPJ inválido.")
-
-    primeiro = digito_verificador_cnpj(digitos[:12])
-    segundo = digito_verificador_cnpj(digitos[:12] + primeiro)
-    if digitos[12:] != primeiro + segundo:
-        raise PydanticCustomError("cnpj_invalido", "CNPJ inválido.")
-
-    return digitos
-
-
-def exigir_razao_social(valor: str | None) -> str:
-    texto = (valor or "").strip()
-    if not texto:
-        raise PydanticCustomError("razao_social_obrigatoria", "Informe a razão social.")
-    return texto
+from src.schemas.validacao import (
+    normalizar_cnpj,
+    validar_endereco,
+    validar_nome_fantasia,
+    validar_percentual,
+    validar_periodo,
+    validar_razao_social,
+    validar_telefone,
+    validar_volume,
+)
 
 
 class TimestampSchemaMixin(BaseModel):
@@ -146,39 +126,46 @@ class EmpresaBase(BaseModel):
     endereco: str | None = None
 
 
-class EmpresaCreate(EmpresaBase):
+class ValidacaoDadosEmpresa(BaseModel):
+    @field_validator("cnpj", check_fields=False)
+    @classmethod
+    def checar_cnpj(cls, valor: str | None) -> str | None:
+        return None if valor is None else normalizar_cnpj(valor)
+
+    @field_validator("razao_social", check_fields=False)
+    @classmethod
+    def checar_razao_social(cls, valor: str | None) -> str:
+        return validar_razao_social(valor)
+
+    @field_validator("nome_fantasia", check_fields=False)
+    @classmethod
+    def checar_nome_fantasia(cls, valor: str | None) -> str | None:
+        return validar_nome_fantasia(valor)
+
+    @field_validator("telefone", check_fields=False)
+    @classmethod
+    def checar_telefone(cls, valor: str | None) -> str | None:
+        return validar_telefone(valor)
+
+    @field_validator("endereco", check_fields=False)
+    @classmethod
+    def checar_endereco(cls, valor: str | None) -> str | None:
+        return validar_endereco(valor)
+
+
+class EmpresaCreate(ValidacaoDadosEmpresa, EmpresaBase):
     razao_social: str
     prefeitura_id: str
-    senha: str = Field(..., min_length=6)
-
-    @field_validator("cnpj")
-    @classmethod
-    def validar_cnpj(cls, valor: str) -> str:
-        return normalizar_cnpj(valor)
-
-    @field_validator("razao_social")
-    @classmethod
-    def validar_razao_social(cls, valor: str) -> str:
-        return exigir_razao_social(valor)
+    senha: str
 
 
-class EmpresaUpdate(BaseModel):
+class EmpresaUpdate(ValidacaoDadosEmpresa):
     cnpj: str | None = None
     email: EmailStr | None = None
     razao_social: str | None = None
     nome_fantasia: str | None = None
     telefone: str | None = None
     endereco: str | None = None
-
-    @field_validator("cnpj")
-    @classmethod
-    def validar_cnpj(cls, valor: str | None) -> str | None:
-        return None if valor is None else normalizar_cnpj(valor)
-
-    @field_validator("razao_social")
-    @classmethod
-    def validar_razao_social(cls, valor: str | None) -> str:
-        return exigir_razao_social(valor)
 
 
 class EmpresaResponse(TimestampSchemaMixin):
@@ -218,6 +205,21 @@ class RegistroBase(BaseModel):
 
 class RegistroCreate(RegistroBase):
     material_id: str
+
+    @field_validator("periodo")
+    @classmethod
+    def checar_periodo(cls, valor: str) -> str:
+        return validar_periodo(valor)
+
+    @field_validator("volume_total")
+    @classmethod
+    def checar_volume(cls, valor: float) -> float:
+        return validar_volume(valor)
+
+    @field_validator("percentual_reciclado")
+    @classmethod
+    def checar_percentual(cls, valor: float) -> float:
+        return validar_percentual(valor)
 
 
 class RegistroValidacaoUpdate(BaseModel):

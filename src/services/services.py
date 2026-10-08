@@ -11,13 +11,13 @@ VALOR_TONELADA_CO2_USD = 5.0
 
 def obter_cotacao_dolar(fallback: float = 5.30) -> float:
     url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
-    
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        
+
         root = ET.fromstring(response.content)
-        
+
         taxas: dict[str, float] = {}
 
         for node in root.iter():
@@ -25,12 +25,12 @@ def obter_cotacao_dolar(fallback: float = 5.30) -> float:
             rate = node.attrib.get("rate")
             if currency and rate:
                 taxas[currency] = float(rate)
-        
+
         eur_usd = taxas["USD"]
         eur_brl = taxas["BRL"]
-        
+
         return round(eur_brl / eur_usd, 4)
-        
+
     except Exception as exc:
         print(f"Erro ao obter cotação: {exc}")
         return fallback

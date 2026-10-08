@@ -51,11 +51,11 @@ class AuthService:
             if empresa_existente.cnpj == dados.cnpj:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="CNPJ já registado.",
+                    detail="CNPJ já cadastrado.",
                 )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="E-mail já registado.",
+                detail="E-mail já cadastrado.",
             )
 
         # 3. Verifica se o email já é utilizado por um admin de prefeitura
@@ -65,18 +65,22 @@ class AuthService:
         if admin_existente:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="E-mail já registado para um administrador da prefeitura.",
+                detail="E-mail já cadastrado para um administrador da prefeitura.",
             )
 
-        # 4. Garante razão social preenchida
-        razao_social = (
-            dados.razao_social or dados.nome_fantasia or f"Empresa {dados.cnpj}"
+        usuario_existente = (
+            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == dados.email).first()
         )
+        if usuario_existente:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="E-mail já cadastrado.",
+            )
 
         nova_empresa = Empresa(
             prefeitura_id=dados.prefeitura_id,
             cnpj=dados.cnpj,
-            razao_social=razao_social,
+            razao_social=dados.razao_social,
             nome_fantasia=dados.nome_fantasia,
             email=dados.email,
             telefone=dados.telefone,

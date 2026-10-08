@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.database import engine
-from src.routers import auth, empresas, materiais, registro
+from src.routers import auth, empresas, materiais, prefeituras, registro
 
 
 @asynccontextmanager
@@ -41,3 +41,4 @@ app.include_router(auth.router)
 app.include_router(registro.router)
 app.include_router(empresas.router)
 app.include_router(materiais.router)
+app.include_router(prefeituras.router)

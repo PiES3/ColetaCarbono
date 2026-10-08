@@ -84,88 +84,114 @@ def auth_headers(
 # ============================================================================
 
 
-def test_register_company_success(client: TestClient):
-    payload = {
-        "cnpj": "12345678000199",
-        "email": "empresa_teste@valida.com",
+def nova_empresa(cnpj: str, email: str, **extras: str) -> dict[str, str]:
+    return {
+        "cnpj": cnpj,
+        "email": email,
         "senha": "password123",
-        "razao_social": "Empresa Teste LTDA",
-        "nome_fantasia": "Teste Corp",
-        "telefone": "88999999999",
-        "endereco": "Rua Exemplo, 123",
+        "razao_social": f"Empresa {cnpj} LTDA",
         "prefeitura_id": "prefeitura-quixada",
+        **extras,
     }
+
+
+def test_list_prefeituras_is_public(client: TestClient):
+    response = client.get("/prefeituras/")
+    assert response.status_code == status.HTTP_200_OK
+    nomes = [p["nome"] for p in response.json()]
+    assert nomes == sorted(nomes)
+    assert {"Quixadá", "Quixeramobim"} <= set(nomes)
+
+
+def test_register_company_success(client: TestClient, db: Session):
+    payload = nova_empresa(
+        "12.345.678/0001-95",
+        "empresa_teste@valida.com",
+        razao_social="Empresa Teste LTDA",
+        nome_fantasia="Teste Corp",
+        telefone="88999999999",
+        endereco="Rua Exemplo, 123",
+    )
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_201_CREATED
     dados = response.json()
-    assert dados["cnpj"] == payload["cnpj"]
+    assert dados["cnpj"] == "12345678000195"
     assert dados["email"] == payload["email"]
+    assert dados["razao_social"] == "Empresa Teste LTDA"
     assert dados["empresa_status"] == "AGUARDANDO VALIDACAO"
-    assert "id" in dados
+
+    empresa = db.query(Empresa).filter(Empresa.id == dados["id"]).first()
+    assert empresa is not None
+    assert empresa.pwd_hash != payload["senha"]
+    assert empresa.pwd_hash.startswith("$2")
+
+
+def test_register_company_requires_razao_social(client: TestClient):
+    payload = nova_empresa("22334455000186", "sem_razao@empresa.com")
+    del payload["razao_social"]
+    assert client.post("/auth/register", json=payload).status_code == 422
+
+    payload["razao_social"] = "   "
+    response = client.post("/auth/register", json=payload)
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["msg"] == "Informe a razão social."
+
+
+def test_register_company_invalid_cnpj(client: TestClient):
+    for cnpj in ("12345678000199", "11111111111111", "123"):
+        payload = nova_empresa(cnpj, f"cnpj_{cnpj}@empresa.com")
+        response = client.post("/auth/register", json=payload)
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["msg"] == "CNPJ inválido."
+
+
+def test_register_company_invalid_email(client: TestClient):
+    payload = nova_empresa("22334455000186", "email-sem-arroba")
+    assert client.post("/auth/register", json=payload).status_code == 422
 
 
 def test_register_company_duplicate_cnpj(client: TestClient):
-    payload = {
-        "cnpj": "00000000000100",  # Já presente no seed_dev.sql
-        "email": "outro_email@empresa.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    payload = nova_empresa("11.222.333/0001-81", "outro_email@empresa.com")
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()["detail"] == "CNPJ já registado."
+    assert response.json()["detail"] == "CNPJ já cadastrado."
 
 
 def test_register_company_duplicate_email(client: TestClient):
-    payload = {
-        "cnpj": "11223344000155",
-        "email": "empresa@demo.com",  # Já presente no seed_dev.sql
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    payload = nova_empresa("11223344000186", "empresa@demo.com")
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()["detail"] == "E-mail já registado."
+    assert response.json()["detail"] == "E-mail já cadastrado."
 
 
 def test_register_company_email_used_by_prefeitura_admin(client: TestClient):
-    payload = {
-        "cnpj": "55667788000122",
-        "email": "gestor@demo.com",  # E-mail de admin da prefeitura
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    payload = nova_empresa("55667788000186", "gestor@demo.com")
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert (
         response.json()["detail"]
-        == "E-mail já registado para um administrador da prefeitura."
+        == "E-mail já cadastrado para um administrador da prefeitura."
     )
 
 
 def test_register_company_nonexistent_prefeitura(client: TestClient):
-    payload = {
-        "cnpj": "99887766000111",
-        "email": "empresa_sem_pref@teste.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-inexistente-123",
-    }
+    payload = nova_empresa(
+        "99887766000105",
+        "empresa_sem_pref@teste.com",
+        prefeitura_id="prefeitura-inexistente-123",
+    )
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"] == "Prefeitura não encontrada."
 
 
 def test_register_company_minimal_fields(client: TestClient):
-    payload = {
-        "cnpj": "98765432000111",
-        "email": "minima@empresa.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    payload = nova_empresa("98765432000198", "minima@empresa.com")
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_201_CREATED
     dados = response.json()
-    assert dados["razao_social"] == f"Empresa {payload['cnpj']}"
+    assert dados["razao_social"] == payload["razao_social"]
+    assert dados["nome_fantasia"] is None
 
 
 # ============================================================================
@@ -215,12 +241,7 @@ def test_login_nonexistent_email(client: TestClient):
 
 def test_login_company_confirmation_and_approval_flow(client: TestClient, db: Session):
     prefeitura = auth_headers(client, "gestor@demo.com")
-    dados = {
-        "cnpj": "22222222000122",
-        "email": "fluxo@teste.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    dados = nova_empresa("33445566000186", "fluxo@teste.com")
     empresa_id = client.post("/auth/register", json=dados).json()["id"]
     login = {"email": dados["email"], "senha": dados["senha"]}
 
@@ -259,12 +280,7 @@ def test_login_company_confirmation_and_approval_flow(client: TestClient, db: Se
 
 
 def test_login_refused_company_shows_reason(client: TestClient):
-    dados = {
-        "cnpj": "44444444000144",
-        "email": "recusada@teste.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    dados = nova_empresa("66778899000186", "recusada@teste.com")
     empresa_id = client.post("/auth/register", json=dados).json()["id"]
     client.patch(
         f"/empresas/{empresa_id}/status",
@@ -280,26 +296,17 @@ def test_login_refused_company_shows_reason(client: TestClient):
 
 
 def test_login_wrong_password_on_pending_company_stays_generic(client: TestClient):
-    dados = {
-        "cnpj": "33333333000133",
-        "email": "pendente_senha@teste.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
-    client.post("/auth/register", json=dados)
+    dados = nova_empresa("77889900000166", "pendente_senha@teste.com")
+    assert client.post("/auth/register", json=dados).status_code == 201
     response = client.post(
         "/auth/login", json={"email": dados["email"], "senha": "outra_senha"}
     )
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.json()["detail"] == "Credenciais inválidas."
 
 
 def test_resend_confirmation_same_message(client: TestClient):
-    dados = {
-        "cnpj": "55555555000155",
-        "email": "reenvio@teste.com",
-        "senha": "password123",
-        "prefeitura_id": "prefeitura-quixada",
-    }
+    dados = nova_empresa("88990011000107", "reenvio@teste.com")
     client.post("/auth/register", json=dados)
 
     existente = client.post("/auth/resend-confirmation", json={"email": dados["email"]})

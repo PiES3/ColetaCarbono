@@ -1,8 +1,45 @@
+import re
 from datetime import datetime
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
+from pydantic_core import PydanticCustomError
 
 from src.schemas.enums import Perfil, StatusValidacao, StatusVinculo
+
+PESOS_CNPJ = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+
+
+def digito_verificador_cnpj(digitos: str) -> str:
+    pesos = PESOS_CNPJ[-len(digitos) :]
+    resto = sum(int(d) * p for d, p in zip(digitos, pesos, strict=True)) % 11
+    return "0" if resto < 2 else str(11 - resto)
+
+
+def normalizar_cnpj(valor: str) -> str:
+    digitos = re.sub(r"\D", "", valor)
+    if len(digitos) != 14 or len(set(digitos)) == 1:
+        raise PydanticCustomError("cnpj_invalido", "CNPJ inválido.")
+
+    primeiro = digito_verificador_cnpj(digitos[:12])
+    segundo = digito_verificador_cnpj(digitos[:12] + primeiro)
+    if digitos[12:] != primeiro + segundo:
+        raise PydanticCustomError("cnpj_invalido", "CNPJ inválido.")
+
+    return digitos
+
+
+def exigir_razao_social(valor: str | None) -> str:
+    texto = (valor or "").strip()
+    if not texto:
+        raise PydanticCustomError("razao_social_obrigatoria", "Informe a razão social.")
+    return texto
 
 
 class TimestampSchemaMixin(BaseModel):
@@ -110,8 +147,19 @@ class EmpresaBase(BaseModel):
 
 
 class EmpresaCreate(EmpresaBase):
+    razao_social: str
     prefeitura_id: str
     senha: str = Field(..., min_length=6)
+
+    @field_validator("cnpj")
+    @classmethod
+    def validar_cnpj(cls, valor: str) -> str:
+        return normalizar_cnpj(valor)
+
+    @field_validator("razao_social")
+    @classmethod
+    def validar_razao_social(cls, valor: str) -> str:
+        return exigir_razao_social(valor)
 
 
 class EmpresaUpdate(BaseModel):

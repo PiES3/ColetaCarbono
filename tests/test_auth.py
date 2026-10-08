@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.app import app
 from src.core.database import get_db
 from src.core.security import require_superuser
-from src.models.models import Empresa, TokenRedefinicaoSenha
+from src.models.models import Empresa, Registro, TokenRedefinicaoSenha
+from src.schemas.enums import StatusValidacao
 from src.services.email_service import email_service
 
 TEST_DATABASE_URL = "sqlite:///./test_carbono.db"
@@ -435,6 +436,25 @@ def test_prefeitura_sees_only_records_from_own_city(client: TestClient):
     quixeramobim = auth_headers(client, "gestor2@demo.com")
     vistos_quixeramobim = client.get("/registros/", headers=quixeramobim).json()
     assert registro_id in {r["id"] for r in vistos_quixeramobim}
+
+
+def test_refused_record_status_is_accepted_by_database(db: Session):
+    registro = Registro(
+        empresa_id="empresa-demo",
+        material_id="papel",
+        periodo="2026-09",
+        volume_total_original=5.0,
+        percentual_reciclado=40.0,
+        status_validacao=StatusValidacao.RECUSADA,
+        motivo_rejeicao="Volume incompatível com a coleta",
+    )
+    db.add(registro)
+    db.commit()
+    db.expire_all()
+
+    salvo = db.query(Registro).filter(Registro.id == registro.id).first()
+    assert salvo is not None
+    assert salvo.status_validacao == StatusValidacao.RECUSADA
 
 
 def test_validation_restricted_to_prefeitura_of_same_city(

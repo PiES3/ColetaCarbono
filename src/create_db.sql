@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS registros (
     volume_total_original REAL NOT NULL,
     percentual_reciclado REAL NOT NULL,
     status_validacao TEXT DEFAULT 'PENDENTE' 
-        CHECK(status_validacao IN ('PENDENTE', 'VALIDADO', 'REJEITADO')),
+        CHECK(status_validacao IN ('PENDENTE', 'VALIDADO', 'RECUSADA')),
     motivo_rejeicao TEXT,
     volume_validado REAL,
     valorestimado REAL,

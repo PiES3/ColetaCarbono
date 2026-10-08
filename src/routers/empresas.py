@@ -2,13 +2,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
-from src.schemas.schemas import EmpresaCreate, EmpresaResponse, UsuarioEmpresaUpdate
+from src.schemas.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate, UsuarioEmpresaUpdate
 from src.services.auth_service import auth_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
@@ -33,7 +34,7 @@ def autocadastro_empresa(
 @router.patch("/{empresa_id}", response_model=EmpresaResponse)
 def editar_empresa(
     empresa_id: str,
-    dados_atualizacao: UsuarioEmpresaUpdate,
+    dados_atualizacao: EmpresaUpdate,
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
@@ -62,6 +63,35 @@ def editar_empresa(
     db.refresh(empresa)
 
     return empresa
+
+
+@router.get("/estatisticas/status")
+def estatisticas_empresas_por_status(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+):
+    """
+    Retorna a contagem de empresas agrupadas por status.
+    Útil para os cards do dashboard da prefeitura.
+    """
+    resultados = (
+        db.query(
+            Empresa.empresa_status, 
+            func.count(Empresa.id)
+        )
+        .filter(
+            Empresa.prefeitura_id == usuario["prefeitura_id"],
+        )
+        .group_by(Empresa.empresa_status)
+        .all()
+    )
+    
+    estatisticas = {
+        status.value if hasattr(status, 'value') else status: total 
+        for status, total in resultados
+    }
+
+    return estatisticas
 
 
 @router.get("/", response_model=list[EmpresaResponse])

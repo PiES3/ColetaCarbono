@@ -14,6 +14,7 @@ from src.app import app
 from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import Empresa, TokenRedefinicaoSenha
+from src.services.email_service import email_service
 
 TEST_DATABASE_URL = "sqlite:///./test_carbono.db"
 test_engine = create_engine(
@@ -881,3 +882,94 @@ def test_reset_password_terminates_previous_active_sessions(
 
     sessao_nova = auth_headers(client, email, nova_senha)
     assert client.get("/auth/me", headers=sessao_nova).status_code == 200
+
+
+# ============================================================================
+# Testes do Envio de E-mails
+# ============================================================================
+
+
+@pytest.fixture
+def emails_enviados(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
+    enviados: list[dict[str, str]] = []
+
+    def registrar(**email: str) -> bool:
+        enviados.append(email)
+        return True
+
+    monkeypatch.setattr(email_service, "enviar", registrar)
+    return enviados
+
+
+def test_forgot_password_sends_token_only_to_registered_email(
+    client: TestClient, db: Session, emails_enviados: list[dict[str, str]]
+):
+    client.post("/auth/forgot-password", json={"email": "empresa2@demo.com"})
+    client.post("/auth/forgot-password", json={"email": "ninguem@dominio.com"})
+
+    assert [e["destinatario"] for e in emails_enviados] == ["empresa2@demo.com"]
+    token = ultimo_token_de_redefinicao(db, "empresa2@demo.com")
+    assert token in emails_enviados[0]["corpo"]
+    assert "15 minutos" in emails_enviados[0]["corpo"]
+
+
+def test_register_sends_confirmation_link(
+    client: TestClient, db: Session, emails_enviados: list[dict[str, str]]
+):
+    dados = nova_empresa("13579246000101", "link@teste.com")
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    token = token_de_confirmacao(db, empresa_id)
+
+    assert [e["destinatario"] for e in emails_enviados] == ["link@teste.com"]
+    assert f"/auth/confirm-email?token={token}" in emails_enviados[0]["corpo"]
+
+
+def test_email_service_sends_through_configured_smtp(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    chamadas: list[tuple[str, ...]] = []
+
+    class SmtpFalso:
+        def __init__(self, host: str, porta: int, timeout: int):
+            chamadas.append(("conectar", host, str(porta)))
+
+        def __enter__(self) -> "SmtpFalso":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def starttls(self) -> None:
+            chamadas.append(("starttls",))
+
+        def login(self, usuario: str, senha: str) -> None:
+            chamadas.append(("login", usuario, senha))
+
+        def send_message(self, mensagem) -> None:
+            chamadas.append(("enviar", mensagem["To"], mensagem["Subject"]))
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.exemplo.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USER", "arclear@exemplo.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "segredo")
+    monkeypatch.setattr("src.services.email_service.smtplib.SMTP", SmtpFalso)
+
+    assert email_service.enviar("destino@teste.com", "Assunto", "Corpo") is True
+    assert chamadas == [
+        ("conectar", "smtp.exemplo.com", "587"),
+        ("starttls",),
+        ("login", "arclear@exemplo.com", "segredo"),
+        ("enviar", "destino@teste.com", "Assunto"),
+    ]
+
+
+def test_email_service_failure_does_not_break_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def falhar(*args: object, **kwargs: object) -> None:
+        raise OSError("servidor fora do ar")
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.exemplo.com")
+    monkeypatch.setattr("src.services.email_service.smtplib.SMTP", falhar)
+
+    assert email_service.enviar("destino@teste.com", "Assunto", "Corpo") is False

@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -25,6 +26,7 @@ from src.models.models import (
 )
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import EmpresaCreate, TokenResponse
+from src.services.email_service import email_service
 
 
 class AuthService:
@@ -225,9 +227,19 @@ class AuthService:
             db.add(token_record)
             db.commit()
 
-            logger.info(
-                f"[EmailService] Enviando e-mail de redefinição para: {email} "
-                f"| Token: {token}"
+            email_service.enviar(
+                destinatario=email,
+                assunto="ArClear: código para redefinir sua senha",
+                corpo=(
+                    "Recebemos um pedido para redefinir a senha da sua conta "
+                    "no ArClear.\n\n"
+                    f"Código: {token}\n\n"
+                    "Copie o código e cole no aplicativo, na tela Recuperar senha. "
+                    f"Ele vale por {RESET_TOKEN_EXPIRE_MINUTES} minutos e só pode "
+                    "ser usado uma vez.\n\n"
+                    "Se você não pediu a troca, ignore este e-mail. "
+                    "Sua senha continua a mesma."
+                ),
             )
 
         return {
@@ -408,9 +420,33 @@ class AuthService:
         empresa.token_expiracao = datetime.now(UTC) + timedelta(
             minutes=CONFIRM_TOKEN_EXPIRE_MINUTES
         )
-        logger.info(
-            "[EmailService] Enviando confirmação de e-mail para: "
-            f"{destino or empresa.email} | Token: {empresa.token_confirmacao_email}"
+
+        base = os.getenv("PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
+        link = f"{base}/auth/confirm-email?token={empresa.token_confirmacao_email}"
+        if CONFIRM_TOKEN_EXPIRE_MINUTES % 60 == 0:
+            prazo = f"{CONFIRM_TOKEN_EXPIRE_MINUTES // 60} horas"
+        else:
+            prazo = f"{CONFIRM_TOKEN_EXPIRE_MINUTES} minutos"
+
+        if destino:
+            assunto = "ArClear: confirme o novo e-mail da sua empresa"
+            pedido = (
+                "Recebemos um pedido para usar este endereço como o novo e-mail "
+                "da sua empresa no ArClear. Para confirmar, abra o link abaixo:"
+            )
+            depois = "Até a confirmação, o login continua com o e-mail anterior."
+        else:
+            assunto = "ArClear: confirme seu e-mail"
+            pedido = (
+                "Para confirmar o e-mail do cadastro da sua empresa no ArClear, "
+                "abra o link abaixo:"
+            )
+            depois = "Depois da confirmação, a prefeitura analisa o seu cadastro."
+
+        email_service.enviar(
+            destinatario=destino or empresa.email,
+            assunto=assunto,
+            corpo=f"{pedido}\n\n{link}\n\nO link vale por {prazo}. {depois}",
         )
 
     def _aplicar_troca_de_email(self, db: Session, empresa: Empresa) -> dict[str, str]:

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS empresas (
         CHECK(empresa_status IN ('AGUARDANDO_VALIDACAO', 'APROVADA', 'RECUSADA', 'DESASSOCIADA')),
     motivo_recusa TEXT,
     email_confirmado INTEGER NOT NULL DEFAULT 0,
+    email_pendente TEXT,
     token_confirmacao_email TEXT,
     token_expiracao DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -88,6 +89,23 @@ CREATE TABLE IF NOT EXISTS registros (
     FOREIGN KEY (validador_id) REFERENCES usuarios_admin(id),
     FOREIGN KEY (criado_por_gestor_id) REFERENCES usuarios_admin(id)
 );
+
+CREATE TABLE IF NOT EXISTS historico_cadastro (
+    id TEXT PRIMARY KEY,
+    empresa_id TEXT NOT NULL,
+    autor_id TEXT NOT NULL,
+    autor_nome TEXT NOT NULL,
+    campo TEXT NOT NULL,
+    valor_anterior TEXT,
+    valor_novo TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME,
+    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_historico_cadastro_empresa_id
+    ON historico_cadastro (empresa_id);
 
 CREATE TABLE IF NOT EXISTS tokens_redefinicao_senha (
     id TEXT PRIMARY KEY,

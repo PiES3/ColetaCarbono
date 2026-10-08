@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from loguru import logger
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.core.security import (
@@ -16,6 +17,7 @@ from src.core.security import (
 )
 from src.models.models import (
     Empresa,
+    HistoricoCadastro,
     Prefeitura,
     TokenRedefinicaoSenha,
     UsuarioAdmin,
@@ -88,7 +90,7 @@ class AuthService:
             pwd_hash=hash_password(dados.senha),
             empresa_status=StatusVinculo.AGUARDANDO_VALIDACAO,
         )
-        self._gerar_token_confirmacao(nova_empresa)
+        self.gerar_token_confirmacao(nova_empresa)
 
         db.add(nova_empresa)
         db.commit()
@@ -341,6 +343,9 @@ class AuthService:
                 detail="Link de confirmação expirado. Peça um novo no aplicativo.",
             )
 
+        if empresa.email_pendente:
+            return self._aplicar_troca_de_email(db, empresa)
+
         empresa.email_confirmado = True
         empresa.token_confirmacao_email = None
         empresa.token_expiracao = None
@@ -354,16 +359,24 @@ class AuthService:
 
     def resend_confirmation(self, db: Session, email: str) -> dict[str, str]:
         """
-        Gera um novo token de confirmação de e-mail.
+        Gera um novo token de confirmação de e-mail, seja do cadastro ou de uma
+        troca de e-mail pendente.
         A mensagem é sempre a mesma, para não revelar quais e-mails têm cadastro.
         """
-        empresa = db.query(Empresa).filter(Empresa.email == email).first()
-        if (
+        empresa = (
+            db.query(Empresa)
+            .filter(or_(Empresa.email == email, Empresa.email_pendente == email))
+            .first()
+        )
+        if empresa and empresa.email_pendente == email:
+            self.gerar_token_confirmacao(empresa, destino=email)
+            db.commit()
+        elif (
             empresa
             and not empresa.email_confirmado
             and empresa.empresa_status == StatusVinculo.AGUARDANDO_VALIDACAO
         ):
-            self._gerar_token_confirmacao(empresa)
+            self.gerar_token_confirmacao(empresa)
             db.commit()
 
         return {
@@ -372,15 +385,60 @@ class AuthService:
             )
         }
 
-    def _gerar_token_confirmacao(self, empresa: Empresa) -> None:
+    def email_em_uso(
+        self, db: Session, email: str, ignorar_empresa_id: str | None = None
+    ) -> bool:
+        empresas = db.query(Empresa).filter(
+            or_(Empresa.email == email, Empresa.email_pendente == email)
+        )
+        if ignorar_empresa_id:
+            empresas = empresas.filter(Empresa.id != ignorar_empresa_id)
+
+        admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.email == email)
+        usuario = db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == email)
+        return any(q.first() is not None for q in (empresas, admin, usuario))
+
+    def gerar_token_confirmacao(
+        self, empresa: Empresa, destino: str | None = None
+    ) -> None:
         empresa.token_confirmacao_email = secrets.token_urlsafe(32)
         empresa.token_expiracao = datetime.now(UTC) + timedelta(
             minutes=CONFIRM_TOKEN_EXPIRE_MINUTES
         )
         logger.info(
-            f"[EmailService] Enviando confirmação de e-mail para: {empresa.email} "
-            f"| Token: {empresa.token_confirmacao_email}"
+            "[EmailService] Enviando confirmação de e-mail para: "
+            f"{destino or empresa.email} | Token: {empresa.token_confirmacao_email}"
         )
+
+    def _aplicar_troca_de_email(self, db: Session, empresa: Empresa) -> dict[str, str]:
+        novo_email = empresa.email_pendente
+        if self.email_em_uso(db, novo_email, ignorar_empresa_id=empresa.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Este e-mail passou a ser usado por outra conta. "
+                    "Solicite a troca novamente."
+                ),
+            )
+
+        db.add(
+            HistoricoCadastro(
+                empresa_id=empresa.id,
+                autor_id=empresa.id,
+                autor_nome=empresa.nome_fantasia or empresa.razao_social,
+                campo="email",
+                valor_anterior=empresa.email,
+                valor_novo=novo_email,
+            )
+        )
+        empresa.email = novo_email
+        empresa.email_pendente = None
+        empresa.email_confirmado = True
+        empresa.token_confirmacao_email = None
+        empresa.token_expiracao = None
+        db.commit()
+
+        return {"message": "E-mail atualizado. Use o novo e-mail para entrar."}
 
     def _barrar_empresa_nao_liberada(self, empresa: Empresa) -> None:
         if empresa.empresa_status == StatusVinculo.APROVADA:

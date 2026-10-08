@@ -507,6 +507,153 @@ def test_company_status_statistics_restricted_to_own_city(client: TestClient):
 
 
 # ============================================================================
+# Testes de Edição dos Dados Cadastrais da Empresa
+# ============================================================================
+
+
+def token_de_confirmacao(db: Session, empresa_id: str) -> str:
+    db.expire_all()
+    empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
+    assert empresa is not None
+    assert empresa.token_confirmacao_email
+    return empresa.token_confirmacao_email
+
+
+def criar_empresa_aprovada(
+    client: TestClient, db: Session, cnpj: str, email: str
+) -> tuple[str, dict[str, str]]:
+    dados = nova_empresa(cnpj, email)
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    token = token_de_confirmacao(db, empresa_id)
+    client.get("/auth/confirm-email", params={"token": token})
+    aprovada = client.patch(
+        f"/empresas/{empresa_id}/status",
+        json={"novo_status": "APROVADA"},
+        headers=auth_headers(client, "gestor@demo.com"),
+    )
+    assert aprovada.status_code == status.HTTP_200_OK
+    return empresa_id, auth_headers(client, email, dados["senha"])
+
+
+def test_company_edits_own_data_with_history(client: TestClient, db: Session):
+    empresa_id, empresa = criar_empresa_aprovada(
+        client, db, "31415926000171", "edita@teste.com"
+    )
+    assert client.get("/empresas/me", headers=empresa).json()["id"] == empresa_id
+
+    alteracoes = {
+        "razao_social": "Nova Razão LTDA",
+        "nome_fantasia": "Nova Fantasia",
+        "telefone": "88988887777",
+        "endereco": "Rua Nova, 10",
+    }
+    resposta = client.patch("/empresas/me", json=alteracoes, headers=empresa)
+    assert resposta.status_code == status.HTTP_200_OK
+    dados = resposta.json()
+    for campo, valor in alteracoes.items():
+        assert dados[campo] == valor
+
+    historico = client.get("/empresas/me/historico", headers=empresa).json()
+    assert {h["campo"] for h in historico} == set(alteracoes)
+    razao = next(h for h in historico if h["campo"] == "razao_social")
+    assert razao["valor_anterior"] == "Empresa 31415926000171 LTDA"
+    assert razao["valor_novo"] == "Nova Razão LTDA"
+    assert razao["autor_id"] == empresa_id
+    assert razao["autor_nome"]
+    assert razao["created_at"]
+
+
+def test_company_cannot_change_cnpj_after_validation(client: TestClient, db: Session):
+    _, empresa = criar_empresa_aprovada(
+        client, db, "27182818000129", "cnpj_fixo@teste.com"
+    )
+    resposta = client.patch(
+        "/empresas/me", json={"cnpj": "11.444.777/0001-61"}, headers=empresa
+    )
+    assert resposta.status_code == status.HTTP_400_BAD_REQUEST
+    assert (
+        resposta.json()["detail"]
+        == "O CNPJ não pode ser alterado após a validação do cadastro."
+    )
+    assert client.get("/empresas/me", headers=empresa).json()["cnpj"] == (
+        "27182818000129"
+    )
+
+
+def test_company_email_change_requires_confirmation(client: TestClient, db: Session):
+    empresa_id, empresa = criar_empresa_aprovada(
+        client, db, "16180339000157", "email_antigo@teste.com"
+    )
+
+    resposta = client.patch(
+        "/empresas/me", json={"email": "email_novo@teste.com"}, headers=empresa
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+    assert resposta.json()["email"] == "email_antigo@teste.com"
+    assert resposta.json()["email_pendente"] == "email_novo@teste.com"
+
+    senha = "password123"
+    login_antigo = {"email": "email_antigo@teste.com", "senha": senha}
+    login_novo = {"email": "email_novo@teste.com", "senha": senha}
+    assert client.post("/auth/login", json=login_antigo).status_code == 200
+    assert client.post("/auth/login", json=login_novo).status_code == 401
+
+    token = token_de_confirmacao(db, empresa_id)
+    confirmacao = client.get("/auth/confirm-email", params={"token": token})
+    assert confirmacao.status_code == status.HTTP_200_OK
+
+    assert client.post("/auth/login", json=login_antigo).status_code == 401
+    assert client.post("/auth/login", json=login_novo).status_code == 200
+
+    dados = client.get("/empresas/me", headers=empresa).json()
+    assert dados["email"] == "email_novo@teste.com"
+    assert dados["email_pendente"] is None
+
+    historico = client.get("/empresas/me/historico", headers=empresa).json()
+    troca = next(h for h in historico if h["campo"] == "email")
+    assert troca["valor_anterior"] == "email_antigo@teste.com"
+    assert troca["valor_novo"] == "email_novo@teste.com"
+    assert any(h["campo"] == "email_pendente" for h in historico)
+
+
+def test_company_email_change_rejects_email_in_use(client: TestClient, db: Session):
+    _, empresa = criar_empresa_aprovada(
+        client, db, "14142135000104", "email_livre@teste.com"
+    )
+    resposta = client.patch(
+        "/empresas/me", json={"email": "gestor2@demo.com"}, headers=empresa
+    )
+    assert resposta.status_code == status.HTTP_400_BAD_REQUEST
+    assert resposta.json()["detail"] == "E-mail já cadastrado."
+
+
+def test_company_data_routes_restricted_to_companies(client: TestClient):
+    prefeitura = auth_headers(client, "gestor2@demo.com")
+    assert client.get("/empresas/me", headers=prefeitura).status_code == 403
+    resposta = client.patch("/empresas/me", json={"telefone": "1"}, headers=prefeitura)
+    assert resposta.status_code == status.HTTP_403_FORBIDDEN
+    assert client.get("/empresas/me").status_code == 401
+
+
+def test_prefeitura_edit_follows_rules_and_records_author(client: TestClient):
+    prefeitura = auth_headers(client, "gestor2@demo.com")
+    resposta = client.patch(
+        "/empresas/empresa-quixeramobim",
+        json={"telefone": "88912345678", "empresa_status": "RECUSADA"},
+        headers=prefeitura,
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+    assert resposta.json()["telefone"] == "88912345678"
+    assert resposta.json()["empresa_status"] == "APROVADA"
+
+    empresa = auth_headers(client, "empresa2@demo.com")
+    historico = client.get("/empresas/me/historico", headers=empresa).json()
+    telefone = next(h for h in historico if h["campo"] == "telefone")
+    assert telefone["autor_id"] == "gestor-quixeramobim"
+    assert telefone["autor_nome"] == "Gestor Quixeramobim"
+
+
+# ============================================================================
 # User Story: Recuperação e Redefinição de Senha
 # ============================================================================
 

@@ -6,11 +6,17 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
-from src.core.security import require_superuser
+from src.core.security import require_empresa, require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
-from src.schemas.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate
+from src.schemas.schemas import (
+    EmpresaCreate,
+    EmpresaResponse,
+    EmpresaUpdate,
+    HistoricoCadastroResponse,
+)
 from src.services.auth_service import auth_service
+from src.services.empresa_service import empresa_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
 
@@ -31,6 +37,56 @@ def autocadastro_empresa(
     return auth_service.register_company(db=db, dados=empresa_in)
 
 
+def empresa_do_usuario(db: Session, usuario: dict[str, Any]) -> Empresa:
+    empresa = db.query(Empresa).filter(Empresa.id == usuario["empresa_id"]).first()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+    return empresa
+
+
+@router.get("/me", response_model=EmpresaResponse)
+def obter_dados_da_empresa(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Retorna os dados cadastrais da empresa autenticada (HU006).
+    """
+    return empresa_do_usuario(db, usuario)
+
+
+@router.patch("/me", response_model=EmpresaResponse)
+def editar_dados_da_empresa(
+    dados_atualizacao: EmpresaUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Edita os dados cadastrais da empresa autenticada (HU006).
+    O novo e-mail só passa a valer depois de confirmado pelo link enviado a ele,
+    e o CNPJ não pode ser alterado depois da validação do cadastro.
+    """
+    return empresa_service.atualizar_dados(
+        db=db,
+        empresa=empresa_do_usuario(db, usuario),
+        dados=dados_atualizacao,
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
+
+
+@router.get("/me/historico", response_model=list[HistoricoCadastroResponse])
+def historico_da_empresa(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Lista as alterações do cadastro da empresa autenticada, da mais recente
+    para a mais antiga, com autor e data/hora (HU006).
+    """
+    return empresa_service.listar_historico(db, usuario["empresa_id"])
+
+
 @router.patch("/{empresa_id}", response_model=EmpresaResponse)
 def editar_empresa(
     empresa_id: str,
@@ -41,6 +97,7 @@ def editar_empresa(
     """
     Edita os dados de uma empresa existente.
     Garante que o Gestor só edite empresas do seu próprio município.
+    Segue as mesmas regras e registra o histórico como a edição feita pela empresa.
     """
     empresa = (
         db.query(Empresa)
@@ -54,15 +111,13 @@ def editar_empresa(
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 
-    update_data = dados_atualizacao.model_dump(exclude_unset=True)
-
-    for key, value in update_data.items():
-        setattr(empresa, key, value)
-
-    db.commit()
-    db.refresh(empresa)
-
-    return empresa
+    return empresa_service.atualizar_dados(
+        db=db,
+        empresa=empresa,
+        dados=dados_atualizacao,
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
 
 
 @router.get("/estatisticas/status")

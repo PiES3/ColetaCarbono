@@ -43,6 +43,7 @@ class Empresa(Base, TimestampMixin):
     )
     motivo_recusa: Mapped[str | None] = mapped_column(String, nullable=True)
     email_confirmado: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_pendente: Mapped[str | None] = mapped_column(String, nullable=True)
     token_confirmacao_email: Mapped[str | None] = mapped_column(String, nullable=True)
     token_expiracao: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -53,6 +54,23 @@ class Empresa(Base, TimestampMixin):
     registros: Mapped[list[Registro]] = relationship(
         back_populates="empresa", cascade="all, delete-orphan"
     )
+    historico: Mapped[list[HistoricoCadastro]] = relationship(
+        back_populates="empresa", cascade="all, delete-orphan"
+    )
+
+
+class HistoricoCadastro(Base, TimestampMixin):
+    __tablename__ = "historico_cadastro"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), index=True)
+    autor_id: Mapped[str] = mapped_column(String, nullable=False)
+    autor_nome: Mapped[str] = mapped_column(String, nullable=False)
+    campo: Mapped[str] = mapped_column(String, nullable=False)
+    valor_anterior: Mapped[str | None] = mapped_column(String, nullable=True)
+    valor_novo: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    empresa: Mapped[Empresa] = relationship(back_populates="historico")
 
 
 class Material(Base, TimestampMixin):

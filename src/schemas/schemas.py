@@ -163,12 +163,22 @@ class EmpresaCreate(EmpresaBase):
 
 
 class EmpresaUpdate(BaseModel):
+    cnpj: str | None = None
     email: EmailStr | None = None
     razao_social: str | None = None
     nome_fantasia: str | None = None
     telefone: str | None = None
     endereco: str | None = None
-    empresa_status: StatusVinculo | None = None
+
+    @field_validator("cnpj")
+    @classmethod
+    def validar_cnpj(cls, valor: str | None) -> str | None:
+        return None if valor is None else normalizar_cnpj(valor)
+
+    @field_validator("razao_social")
+    @classmethod
+    def validar_razao_social(cls, valor: str | None) -> str:
+        return exigir_razao_social(valor)
 
 
 class EmpresaResponse(TimestampSchemaMixin):
@@ -176,11 +186,24 @@ class EmpresaResponse(TimestampSchemaMixin):
     prefeitura_id: str
     cnpj: str
     email: EmailStr
+    email_pendente: str | None = None
     razao_social: str
     nome_fantasia: str | None = None
     telefone: str | None = None
     endereco: str | None = None
     empresa_status: StatusVinculo
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HistoricoCadastroResponse(BaseModel):
+    id: str
+    campo: str
+    valor_anterior: str | None = None
+    valor_novo: str | None = None
+    autor_id: str
+    autor_nome: str
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

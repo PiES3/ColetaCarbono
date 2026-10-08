@@ -9,7 +9,7 @@ from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
-from src.schemas.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate, UsuarioEmpresaUpdate
+from src.schemas.schemas import EmpresaCreate, EmpresaResponse, EmpresaUpdate
 from src.services.auth_service import auth_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
@@ -50,12 +50,12 @@ def editar_empresa(
         )
         .first()
     )
-    
+
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 
     update_data = dados_atualizacao.model_dump(exclude_unset=True)
-    
+
     for key, value in update_data.items():
         setattr(empresa, key, value)
 
@@ -75,19 +75,16 @@ def estatisticas_empresas_por_status(
     Útil para os cards do dashboard da prefeitura.
     """
     resultados = (
-        db.query(
-            Empresa.empresa_status, 
-            func.count(Empresa.id)
-        )
+        db.query(Empresa.empresa_status, func.count(Empresa.id))
         .filter(
             Empresa.prefeitura_id == usuario["prefeitura_id"],
         )
         .group_by(Empresa.empresa_status)
         .all()
     )
-    
+
     estatisticas = {
-        status.value if hasattr(status, 'value') else status: total 
+        status.value if hasattr(status, "value") else status: total
         for status, total in resultados
     }
 

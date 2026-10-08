@@ -1,7 +1,8 @@
+import xml.etree.ElementTree as ET
+
 import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-import xml.etree.ElementTree as ET
 
 from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao

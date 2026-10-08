@@ -71,6 +71,7 @@ def obter_usuario_atual(
         user_type=current_user["user_type"],
         is_superuser=current_user["is_superuser"],
         prefeitura_id=current_user.get("prefeitura_id"),
+        prefeitura_nome=current_user.get("prefeitura_nome"),
         status_vinculo=current_user.get("status_vinculo"),
     )
 

@@ -263,6 +263,7 @@ class TokenResponse(BaseModel):
     email: str
     nome: str
     prefeitura_id: str | None = None
+    prefeitura_nome: str | None = None
     status_vinculo: StatusVinculo | None = None
 
 
@@ -273,6 +274,7 @@ class CurrentUserResponse(BaseModel):
     user_type: str
     is_superuser: bool
     prefeitura_id: str | None = None
+    prefeitura_nome: str | None = None
     status_vinculo: StatusVinculo | None = None
 
 

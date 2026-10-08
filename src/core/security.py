@@ -169,6 +169,7 @@ def get_current_user(
             "user_type": "PREFEITURA",
             "is_superuser": True,
             "prefeitura_id": admin.id_prefeitura,
+            "prefeitura_nome": admin.prefeitura.nome,
             "status_vinculo": None,
             "instance": admin,
         }
@@ -198,6 +199,7 @@ def get_current_user(
             "is_superuser": False,
             "empresa_id": empresa.id,
             "prefeitura_id": empresa.prefeitura_id,
+            "prefeitura_nome": empresa.prefeitura.nome,
             "status_vinculo": empresa.empresa_status,
             "instance": empresa,
         }
@@ -229,6 +231,7 @@ def get_current_user(
             "is_superuser": False,
             "empresa_id": user_empresa.id_empresa,
             "prefeitura_id": user_empresa.empresa.prefeitura_id,
+            "prefeitura_nome": user_empresa.empresa.prefeitura.nome,
             "status_vinculo": user_empresa.empresa.empresa_status,
             "instance": user_empresa,
         }

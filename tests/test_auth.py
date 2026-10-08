@@ -347,6 +347,17 @@ def test_auth_me_unauthorized(client: TestClient):
     assert client.get("/auth/me").status_code == status.HTTP_401_UNAUTHORIZED
 
 
+def test_login_and_me_return_own_city_name(client: TestClient):
+    login = client.post(
+        "/auth/login", json={"email": "gestor2@demo.com", "senha": "demo123"}
+    )
+    assert login.json()["prefeitura_nome"] == "Quixeramobim"
+
+    empresa = auth_headers(client, "empresa@demo.com")
+    me = client.get("/auth/me", headers=empresa).json()
+    assert me["prefeitura_nome"] == "Quixadá"
+
+
 def test_permission_superuser_route(client: TestClient):
     @app.get("/test-admin-only")
     def admin_only_route(_user: Annotated[dict, Depends(require_superuser)]):

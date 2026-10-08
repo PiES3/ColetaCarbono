@@ -124,6 +124,7 @@ class AuthService:
                 email=admin.email,
                 nome=admin.nome,
                 prefeitura_id=admin.id_prefeitura,
+                prefeitura_nome=admin.prefeitura.nome,
                 status_vinculo=None,
             )
 
@@ -154,6 +155,7 @@ class AuthService:
                 email=empresa.email,
                 nome=nome_empresa,
                 prefeitura_id=empresa.prefeitura_id,
+                prefeitura_nome=empresa.prefeitura.nome,
                 status_vinculo=empresa.empresa_status,
             )
 
@@ -179,8 +181,9 @@ class AuthService:
                 user_id=user_empresa.id,
                 email=user_empresa.email,
                 nome=user_empresa.nome,
-                prefeitura_id=None,
-                status_vinculo=None,
+                prefeitura_id=user_empresa.empresa.prefeitura_id,
+                prefeitura_nome=user_empresa.empresa.prefeitura.nome,
+                status_vinculo=user_empresa.empresa.empresa_status,
             )
 
         # 4. Credenciais não encontradas ou inválidas

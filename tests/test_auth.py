@@ -483,6 +483,8 @@ def test_linked_companies_listing_restricted_to_own_city(client: TestClient):
     empresas = resposta.json()
     assert "empresa-demo" in {e["id"] for e in empresas}
     assert {e["prefeitura_id"] for e in empresas} == {"prefeitura-quixada"}
+    demo = next(e for e in empresas if e["id"] == "empresa-demo")
+    assert demo["email_confirmado"] is True
 
     empresa = auth_headers(client, "empresa@demo.com")
     resposta = client.get("/empresas/", headers=empresa)

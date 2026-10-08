@@ -186,12 +186,14 @@ class EmpresaResponse(TimestampSchemaMixin):
     prefeitura_id: str
     cnpj: str
     email: EmailStr
+    email_confirmado: bool = False
     email_pendente: str | None = None
     razao_social: str
     nome_fantasia: str | None = None
     telefone: str | None = None
     endereco: str | None = None
     empresa_status: StatusVinculo
+    motivo_recusa: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

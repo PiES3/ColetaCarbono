@@ -229,6 +229,7 @@ def test_login_company_confirmation_and_approval_flow(client: TestClient):
 
     db = TestingSessionLocal()
     empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
+    assert empresa is not None
     token = empresa.token_confirmacao_email
     db.close()
 
@@ -585,6 +586,7 @@ def test_reset_password_success_and_login(client: TestClient):
         .order_by(TokenRedefinicaoSenha.created_at.desc())
         .first()
     )
+    assert token_entry is not None
     token = token_entry.token
     db.close()
 
@@ -603,6 +605,7 @@ def test_reset_password_success_and_login(client: TestClient):
         .filter(TokenRedefinicaoSenha.token == token)
         .first()
     )
+    assert recheck_token is not None
     assert recheck_token.utilizado is True
     db.close()
 
@@ -640,6 +643,7 @@ def test_reset_password_single_use_invalidated(client: TestClient):
         .order_by(TokenRedefinicaoSenha.created_at.desc())
         .first()
     )
+    assert token_entry is not None
     token = token_entry.token
     db.close()
 
@@ -792,6 +796,7 @@ def test_reset_password_terminates_previous_active_sessions(client: TestClient):
         .order_by(TokenRedefinicaoSenha.created_at.desc())
         .first()
     )
+    assert token_entry is not None
     reset_token = token_entry.token
     db.close()
 

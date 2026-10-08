@@ -1,6 +1,7 @@
 import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+import xml.etree.ElementTree as ET
 
 from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao
@@ -8,14 +9,31 @@ from src.schemas.enums import StatusValidacao
 VALOR_TONELADA_CO2_USD = 5.0
 
 
-def obter_cotacao_dolar() -> float:
+def obter_cotacao_dolar(fallback: float = 5.30) -> float:
+    url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+    
     try:
-        response = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL")
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        dados = response.json()
-        return float(dados["USDBRL"]["bid"])
-    except Exception:
-        return 5.30
+        
+        root = ET.fromstring(response.content)
+        
+        taxas: dict[str, float] = {}
+
+        for node in root.iter():
+            currency = node.attrib.get("currency")
+            rate = node.attrib.get("rate")
+            if currency and rate:
+                taxas[currency] = float(rate)
+        
+        eur_usd = taxas["USD"]
+        eur_brl = taxas["BRL"]
+        
+        return round(eur_brl / eur_usd, 4)
+        
+    except Exception as exc:
+        print(f"Erro ao obter cotação: {exc}")
+        return fallback
 
 
 class RegistroService:

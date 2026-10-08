@@ -8,7 +8,7 @@ from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
-from src.schemas.schemas import EmpresaCreate, EmpresaResponse
+from src.schemas.schemas import EmpresaCreate, EmpresaResponse, UsuarioEmpresaUpdate
 from src.services.auth_service import auth_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
@@ -28,6 +28,40 @@ def autocadastro_empresa(
     A empresa nasce com o status 'AGUARDANDO_VALIDACAO'.
     """
     return auth_service.register_company(db=db, dados=empresa_in)
+
+
+@router.patch("/{empresa_id}", response_model=EmpresaResponse)
+def editar_empresa(
+    empresa_id: str,
+    dados_atualizacao: UsuarioEmpresaUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+):
+    """
+    Edita os dados de uma empresa existente.
+    Garante que o Gestor só edite empresas do seu próprio município.
+    """
+    empresa = (
+        db.query(Empresa)
+        .filter(
+            Empresa.id == empresa_id,
+            Empresa.prefeitura_id == usuario["prefeitura_id"],
+        )
+        .first()
+    )
+    
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    update_data = dados_atualizacao.model_dump(exclude_unset=True)
+    
+    for key, value in update_data.items():
+        setattr(empresa, key, value)
+
+    db.commit()
+    db.refresh(empresa)
+
+    return empresa
 
 
 @router.get("/", response_model=list[EmpresaResponse])

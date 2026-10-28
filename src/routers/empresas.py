@@ -1,10 +1,11 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
+from src.core.security import get_current_user_optional, require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import EmpresaCreate, EmpresaResponse
@@ -57,4 +58,72 @@ def validar_vinculo_empresa(
     db.commit()
     db.refresh(empresa)
 
+    return empresa
+
+
+@router.get("/", response_model=list[EmpresaResponse])
+def listar_empresas(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[
+        dict[str, Any] | None, Depends(get_current_user_optional)
+    ] = None,
+    prefeitura_id: str | None = None,
+    empresa_status: StatusVinculo | None = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    """
+    Lista empresas cadastradas no sistema.
+    Pode ser filtrada por prefeitura_id e empresa_status.
+    Se o solicitante for um Gestor da Prefeitura e prefeitura_id não for informado,
+    retorna por padrão as empresas vinculadas à sua prefeitura.
+    """
+    query = db.query(Empresa)
+
+    if (
+        current_user
+        and current_user.get("user_type") == "PREFEITURA"
+        and not prefeitura_id
+    ):
+        prefeitura_id = current_user.get("prefeitura_id")
+
+    if prefeitura_id:
+        query = query.filter(Empresa.prefeitura_id == prefeitura_id)
+    if empresa_status:
+        query = query.filter(Empresa.empresa_status == empresa_status)
+
+    return query.order_by(Empresa.razao_social.asc()).offset(skip).limit(limit).all()
+
+
+@router.get("/vinculadas", response_model=list[EmpresaResponse])
+def listar_empresas_vinculadas(
+    current_user: Annotated[dict[str, Any], Depends(require_superuser)],
+    db: Annotated[Session, Depends(get_db)],
+    status_vinculo: StatusVinculo | None = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    """
+    Endpoint para o Gestor da prefeitura listar as empresas vinculadas à sua
+    prefeitura para seleção ao lançar registros.
+    """
+    prefeitura_id = current_user.get("prefeitura_id")
+    query = db.query(Empresa).filter(Empresa.prefeitura_id == prefeitura_id)
+    if status_vinculo:
+        query = query.filter(Empresa.empresa_status == status_vinculo)
+
+    return query.order_by(Empresa.razao_social.asc()).offset(skip).limit(limit).all()
+
+
+@router.get("/{empresa_id}", response_model=EmpresaResponse)
+def obter_empresa(
+    empresa_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Obtém uma empresa pelo ID.
+    """
+    empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
     return empresa

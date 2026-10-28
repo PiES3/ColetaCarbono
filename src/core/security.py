@@ -248,6 +248,34 @@ def require_superuser(
     return current_user
 
 
+def require_gestor(
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Exige que o usuário autenticado seja um Gestor da Prefeitura."""
+    if (
+        not current_user.get("is_superuser")
+        or current_user.get("user_type") != "PREFEITURA"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso restrito a gestores da prefeitura.",
+        )
+    return current_user
+
+
+def get_current_user_optional(
+    auth: Annotated[HTTPAuthorizationCredentials | None, Depends(http_bearer)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, Any] | None:
+    """Extrai o usuário autenticado se presente; retorna None se anônimo."""
+    if not auth or not auth.credentials:
+        return None
+    try:
+        return get_current_user(auth=auth, db=db)
+    except HTTPException:
+        return None
+
+
 def require_empresa(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> dict[str, Any]:

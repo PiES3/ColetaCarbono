@@ -146,12 +146,34 @@ class RegistroBase(BaseModel):
 class RegistroCreate(RegistroBase):
     empresa_id: str
     material_id: str
+    volume_validado: float | None = None
+
+
+class RegistroGestorCreate(RegistroCreate):
+    pass
+
+
+class RegistroValidacaoRequest(BaseModel):
+    validador_id: str | None = None
+    volume_validado: float | None = None
+
+
+class RegistroRejeicaoRequest(BaseModel):
+    motivo_rejeicao: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("motivo_rejeicao", "motivo"),
+        description="Motivo da rejeição do registro (obrigatório).",
+    )
+    validador_id: str | None = None
 
 
 class RegistroValidacaoUpdate(BaseModel):
     status_validacao: StatusValidacao
-    motivo_rejeicao: str | None = None
-    validador_id: str
+    motivo_rejeicao: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("motivo_rejeicao", "motivo"),
+    )
+    validador_id: str | None = None
     volume_validado: float | None = None
     valorestimado: float | None = None
     carbonoevitado: float | None = None
@@ -165,13 +187,27 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     empresa_id: str
     material_id: str
     validador_id: str | None = None
+    criado_por_gestor_id: str | None = None
+    inserido_pela_prefeitura: bool = False
+    origem: str = "EMPRESA"
+    nome_gestor: str | None = None
     status_validacao: StatusValidacao
+    status: StatusValidacao | None = None
     motivo_rejeicao: str | None = None
+    motivo: str | None = None
     volume_validado: float | None = None
     valorestimado: float | None = None
     carbonoevitado: float | None = None
+    data_validacao: datetime | None = None
+    data_hora_validacao: datetime | None = None
+    validador_nome: str | None = None
+    nome_validador: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RegistroAcompanhamentoResponse(RegistroResponse):
+    pass
 
 
 class EmpresaComUsuariosResponse(EmpresaResponse):

@@ -1,61 +1,13 @@
-import os
-import sqlite3
-from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
 
 from src.app import app
-from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import TokenRedefinicaoSenha
-
-TEST_DATABASE_URL = "sqlite:///./test_carbono.db"
-test_engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_db() -> Generator[None, None, None]:
-    base_dir = os.path.dirname(os.path.dirname(__file__))
-    con = sqlite3.connect("test_carbono.db")
-    for script in ("create_db.sql", "seed_dev.sql"):
-        script_path = os.path.join(base_dir, "src", script)
-        if os.path.exists(script_path):
-            with open(script_path, encoding="utf-8") as f:
-                con.executescript(f.read())
-    con.commit()
-    con.close()
-
-    yield
-
-    if os.path.exists("test_carbono.db"):
-        os.remove("test_carbono.db")
-
-
-def override_get_db() -> Generator[Session, None, None]:
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    with TestClient(app) as test_client:
-        yield test_client
-
+from tests.conftest import TestingSessionLocal
 
 # ============================================================================
 # Testes de Autocadastro de Empresa

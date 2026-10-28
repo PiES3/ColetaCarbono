@@ -17,4 +17,6 @@ class StatusVinculo(StrEnum):
 class StatusValidacao(StrEnum):
     PENDENTE = "PENDENTE"
     VALIDADO = "VALIDADO"
-    RECUSADA = "RECUSADA"
+    REJEITADO = "REJEITADO"
+    RECUSADA = "REJEITADO"
+

@@ -76,11 +76,12 @@ CREATE TABLE IF NOT EXISTS registros (
     volume_total_original REAL NOT NULL,
     percentual_reciclado REAL NOT NULL,
     status_validacao TEXT DEFAULT 'PENDENTE' 
-        CHECK(status_validacao IN ('PENDENTE', 'VALIDADO', 'RECUSADA')),
+        CHECK(status_validacao IN ('PENDENTE', 'VALIDADO', 'REJEITADO', 'RECUSADA')),
     motivo_rejeicao TEXT,
     volume_validado REAL,
     valorestimado REAL,
     carbonoevitado REAL,
+    data_validacao DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted_at DATETIME,
@@ -103,6 +104,12 @@ CREATE TABLE IF NOT EXISTS historico_cadastro (
     deleted_at DATETIME,
     FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS ix_empresas_prefeitura_id
+    ON empresas (prefeitura_id);
+
+CREATE INDEX IF NOT EXISTS ix_registros_empresa_id
+    ON registros (empresa_id);
 
 CREATE INDEX IF NOT EXISTS ix_historico_cadastro_empresa_id
     ON historico_cadastro (empresa_id);

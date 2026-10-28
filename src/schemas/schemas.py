@@ -33,12 +33,18 @@ class MaterialBase(BaseModel):
 
 
 class MaterialCreate(MaterialBase):
-    pass
+    categoria: str = Field(min_length=1, max_length=100)
+    fator_emissaoipcc: float = Field(ge=0, allow_inf_nan=False)
+
+    @field_validator("categoria", mode="before")
+    @classmethod
+    def limpar_categoria(cls, valor: object) -> object:
+        return valor.strip() if isinstance(valor, str) else valor
 
 
 class MaterialUpdate(BaseModel):
-    categoria: str | None = None
-    fator_emissaoipcc: float | None = None
+    categoria: str | None = Field(default=None, min_length=1, max_length=100)
+    fator_emissaoipcc: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class MaterialResponse(MaterialBase, TimestampSchemaMixin):
@@ -71,7 +77,7 @@ class UsuarioAdminCreate(UsuarioAdminBase):
     id_prefeitura: str
     senha: str = Field(
         ...,
-        min_length=6,
+        min_length=8,
         description="Senha em texto plano que será hasheada no backend",
     )
 
@@ -99,7 +105,7 @@ class UsuarioEmpresaCreate(UsuarioEmpresaBase):
     id_empresa: str
     senha: str = Field(
         ...,
-        min_length=6,
+        min_length=8,
         description="Senha em texto plano que será hasheada no backend",
     )
 
@@ -204,7 +210,9 @@ class RegistroBase(BaseModel):
 
 
 class RegistroCreate(RegistroBase):
+    empresa_id: str | None = None
     material_id: str
+    volume_validado: float | None = None
 
     @field_validator("periodo")
     @classmethod
@@ -216,16 +224,52 @@ class RegistroCreate(RegistroBase):
     def checar_volume(cls, valor: float) -> float:
         return validar_volume(valor)
 
+    @field_validator("volume_validado")
+    @classmethod
+    def checar_volume_validado(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_volume(valor)
+
     @field_validator("percentual_reciclado")
     @classmethod
     def checar_percentual(cls, valor: float) -> float:
         return validar_percentual(valor)
 
 
+class RegistroGestorCreate(RegistroCreate):
+    empresa_id: str
+
+    @field_validator("periodo")
+    @classmethod
+    def checar_periodo(cls, valor: str) -> str:
+        return validar_periodo(valor, permitir_futuro=True)
+
+
+class RegistroValidacaoRequest(BaseModel):
+    validador_id: str | None = None
+    volume_validado: float | None = None
+
+    @field_validator("volume_validado")
+    @classmethod
+    def checar_volume(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_volume(valor)
+
+
+class RegistroRejeicaoRequest(BaseModel):
+    motivo_rejeicao: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("motivo_rejeicao", "motivo"),
+        description="Motivo da rejeição do registro (obrigatório).",
+    )
+    validador_id: str | None = None
+
+
 class RegistroValidacaoUpdate(BaseModel):
     status_validacao: StatusValidacao
-    motivo_rejeicao: str | None = None
-    validador_id: str
+    motivo_rejeicao: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("motivo_rejeicao", "motivo"),
+    )
+    validador_id: str | None = None
     volume_validado: float | None = None
     valorestimado: float | None = None
     carbonoevitado: float | None = None
@@ -239,13 +283,27 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     empresa_id: str
     material_id: str
     validador_id: str | None = None
+    criado_por_gestor_id: str | None = None
+    inserido_pela_prefeitura: bool = False
+    origem: str = "EMPRESA"
+    nome_gestor: str | None = None
     status_validacao: StatusValidacao
+    status: StatusValidacao | None = None
     motivo_rejeicao: str | None = None
+    motivo: str | None = None
     volume_validado: float | None = None
     valorestimado: float | None = None
     carbonoevitado: float | None = None
+    data_validacao: datetime | None = None
+    data_hora_validacao: datetime | None = None
+    validador_nome: str | None = None
+    nome_validador: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RegistroAcompanhamentoResponse(RegistroResponse):
+    pass
 
 
 class EmpresaComUsuariosResponse(EmpresaResponse):

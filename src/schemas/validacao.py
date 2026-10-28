@@ -102,17 +102,18 @@ def validar_motivo_recusa(valor: str | None) -> str | None:
     return texto
 
 
-def validar_periodo(valor: str) -> str:
+def validar_periodo(valor: str, *, permitir_futuro: bool = False) -> str:
     if not PADRAO_PERIODO.match(valor):
         raise PydanticCustomError(
             "periodo_invalido", "Informe o período no formato AAAA-MM."
         )
-    ano, mes = (int(parte) for parte in valor.split("-"))
-    hoje = date.today()
-    if (ano, mes) > (hoje.year, hoje.month):
-        raise PydanticCustomError(
-            "periodo_futuro", "O período não pode estar no futuro."
-        )
+    if not permitir_futuro:
+        ano, mes = (int(parte) for parte in valor.split("-"))
+        hoje = date.today()
+        if (ano, mes) > (hoje.year, hoje.month):
+            raise PydanticCustomError(
+                "periodo_futuro", "O período não pode estar no futuro."
+            )
     return valor
 
 

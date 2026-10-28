@@ -1,76 +1,16 @@
-import sqlite3
-from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Annotated
 
 import pytest
 from fastapi import Depends, status
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from src.app import app
-from src.core.database import get_db
 from src.core.security import require_superuser
 from src.models.models import Empresa, Registro, TokenRedefinicaoSenha
 from src.schemas.enums import StatusValidacao
 from src.services.email_service import email_service
-
-TEST_DATABASE_URL = "sqlite:///./test_carbono.db"
-test_engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_db() -> Generator[None, None, None]:
-    """Cria e popula o banco de dados de teste via scripts SQL."""
-    db_path = Path("test_carbono.db")
-    base_dir = Path(__file__).resolve().parent.parent
-
-    con = sqlite3.connect(db_path)
-    for script in ("create_db.sql", "seed_dev.sql"):
-        script_path = base_dir / "src" / script
-        if script_path.exists():
-            con.executescript(script_path.read_text(encoding="utf-8"))
-    con.commit()
-    con.close()
-
-    yield
-
-    # Limpeza pós-testes
-    db_path.unlink(missing_ok=True)
-
-
-def override_get_db() -> Generator[Session, None, None]:
-    """Sobrescreve a injeção de dependência do FastAPI para usar o banco de teste."""
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    """Fixture para simular requisições HTTP."""
-    with TestClient(app) as test_client:
-        yield test_client
-
-
-@pytest.fixture
-def db() -> Generator[Session, None, None]:
-    """Fixture de banco de dados para consultas internas nos testes."""
-    db_session = TestingSessionLocal()
-    try:
-        yield db_session
-    finally:
-        db_session.close()
 
 
 def auth_headers(
@@ -808,6 +748,75 @@ def test_validation_and_refusal_fields_are_validated(client: TestClient):
     assert "O motivo da recusa deve ter entre 5 e 500 caracteres." in mensagens(
         resposta
     )
+
+
+# ============================================================================
+# Testes de regressão
+# ============================================================================
+
+
+def test_register_rejects_email_pending_on_another_company(
+    client: TestClient, db: Session
+):
+    _, empresa = criar_empresa_aprovada(
+        client, db, "50505050000107", "dona_do_pendente@teste.com"
+    )
+    resposta = client.patch(
+        "/empresas/me", json={"email": "reservado@teste.com"}, headers=empresa
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+
+    resposta = client.post(
+        "/auth/register",
+        json=nova_empresa("87654321000198", "reservado@teste.com"),
+    )
+    assert resposta.status_code == status.HTTP_400_BAD_REQUEST
+    assert resposta.json()["detail"] == "E-mail já cadastrado."
+
+
+def test_approval_after_refusal_clears_reason(client: TestClient, db: Session):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    dados = nova_empresa("76543210000198", "recusada_depois_aprovada@teste.com")
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    client.get(
+        "/auth/confirm-email", params={"token": token_de_confirmacao(db, empresa_id)}
+    )
+    url_status = f"/empresas/{empresa_id}/status"
+
+    recusa = {"novo_status": "RECUSADA", "motivo_recusa": "Documentação incompleta"}
+    resposta = client.patch(url_status, json=recusa, headers=prefeitura)
+    assert resposta.json()["motivo_recusa"] == "Documentação incompleta"
+
+    resposta = client.patch(
+        url_status, json={"novo_status": "APROVADA"}, headers=prefeitura
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+    assert resposta.json()["motivo_recusa"] is None
+
+
+def test_records_listing_pagination_is_bounded(client: TestClient):
+    empresa = auth_headers(client, "empresa@demo.com")
+    for parametros in ({"limit": 0}, {"limit": 501}, {"skip": -1}):
+        resposta = client.get("/registros/", params=parametros, headers=empresa)
+        assert resposta.status_code == 422
+
+
+def test_material_fields_are_validated(client: TestClient):
+    prefeitura = auth_headers(client, "gestor@demo.com")
+    for material in (
+        {"categoria": "   ", "fator_emissaoipcc": 1.0},
+        {"categoria": "Isopor", "fator_emissaoipcc": -1},
+    ):
+        resposta = client.post("/materiais/", json=material, headers=prefeitura)
+        assert resposta.status_code == 422
+
+
+def test_plaintext_password_prefix_is_not_accepted():
+    from src.core.security import hash_password, verify_password
+
+    assert verify_password("demo123", "hashed_demo123") is False
+    assert verify_password("x" * 100, hash_password("Senha@123")) is False
+    assert verify_password("Senha@123", hash_password("Senha@123")) is True
 
 
 # ============================================================================

@@ -1,15 +1,18 @@
-import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from loguru import logger
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.core.security import (
+from src.core.config import (
     CONFIRM_TOKEN_EXPIRE_MINUTES,
+    PUBLIC_API_URL,
     RESET_TOKEN_EXPIRE_MINUTES,
+)
+from src.core.security import (
     create_access_token,
     get_password_hash_signature,
     hash_password,
@@ -27,6 +30,13 @@ from src.models.models import (
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import EmpresaCreate, TokenResponse
 from src.services.email_service import email_service
+
+
+def formatar_prazo(minutos: int) -> str:
+    if minutos % 60 == 0:
+        horas = minutos // 60
+        return f"{horas} hora" if horas == 1 else f"{horas} horas"
+    return f"{minutos} minuto" if minutos == 1 else f"{minutos} minutos"
 
 
 class AuthService:
@@ -48,37 +58,22 @@ class AuthService:
                 detail="Prefeitura não encontrada.",
             )
 
-        # 2. Verifica unicidade de CNPJ e Email entre empresas
-        empresa_existente = (
-            db.query(Empresa)
-            .filter((Empresa.cnpj == dados.cnpj) | (Empresa.email == dados.email))
-            .first()
-        )
-        if empresa_existente:
-            if empresa_existente.cnpj == dados.cnpj:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="CNPJ já cadastrado.",
-                )
+        # 2. Verifica unicidade do CNPJ
+        if db.query(Empresa.id).filter(Empresa.cnpj == dados.cnpj).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="E-mail já cadastrado.",
+                detail="CNPJ já cadastrado.",
             )
 
-        # 3. Verifica se o email já é utilizado por um admin de prefeitura
-        admin_existente = (
-            db.query(UsuarioAdmin).filter(UsuarioAdmin.email == dados.email).first()
-        )
-        if admin_existente:
+        # 3. Verifica se o e-mail já é usado por um admin de prefeitura
+        if db.query(UsuarioAdmin.id).filter(UsuarioAdmin.email == dados.email).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="E-mail já cadastrado para um administrador da prefeitura.",
             )
 
-        usuario_existente = (
-            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == dados.email).first()
-        )
-        if usuario_existente:
+        # 4. Verifica e-mails de empresas (inclusive trocas pendentes) e usuários
+        if self.email_em_uso(db, dados.email):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="E-mail já cadastrado.",
@@ -95,9 +90,18 @@ class AuthService:
             pwd_hash=hash_password(dados.senha),
             empresa_status=StatusVinculo.AGUARDANDO_VALIDACAO,
         )
-        self.gerar_token_confirmacao(nova_empresa)
-
         db.add(nova_empresa)
+        try:
+            db.flush()
+        except IntegrityError:
+            # Cadastro simultâneo com o mesmo CNPJ/e-mail.
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CNPJ ou e-mail já cadastrado.",
+            ) from None
+
+        self.gerar_token_confirmacao(nova_empresa)
         db.commit()
         db.refresh(nova_empresa)
         return nova_empresa
@@ -143,11 +147,7 @@ class AuthService:
                 "user_type": "EMPRESA",
                 "is_superuser": False,
                 "prefeitura_id": empresa.prefeitura_id,
-                "status_vinculo": (
-                    empresa.empresa_status.value
-                    if hasattr(empresa.empresa_status, "value")
-                    else str(empresa.empresa_status)
-                ),
+                "status_vinculo": str(empresa.empresa_status),
                 "pwd_sig": get_password_hash_signature(empresa.pwd_hash),
             }
             access_token = create_access_token(token_payload)
@@ -211,6 +211,7 @@ class AuthService:
         )
 
         if admin or empresa or user_empresa:
+            validade = formatar_prazo(RESET_TOKEN_EXPIRE_MINUTES)
             # Invalida tokens anteriores não utilizados para este e-mail
             db.query(TokenRedefinicaoSenha).filter(
                 TokenRedefinicaoSenha.email == email,
@@ -238,7 +239,7 @@ class AuthService:
                     "no ArClear.\n\n"
                     f"Código: {token}\n\n"
                     "Copie o código e cole no aplicativo, na tela Recuperar senha. "
-                    f"Ele vale por {RESET_TOKEN_EXPIRE_MINUTES} minutos e só pode "
+                    f"Ele vale por {validade} e só pode "
                     "ser usado uma vez.\n\n"
                     "Se você não pediu a troca, ignore este e-mail. "
                     "Sua senha continua a mesma."
@@ -424,12 +425,11 @@ class AuthService:
             minutes=CONFIRM_TOKEN_EXPIRE_MINUTES
         )
 
-        base = os.getenv("PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
-        link = f"{base}/auth/confirm-email?token={empresa.token_confirmacao_email}"
-        if CONFIRM_TOKEN_EXPIRE_MINUTES % 60 == 0:
-            prazo = f"{CONFIRM_TOKEN_EXPIRE_MINUTES // 60} horas"
-        else:
-            prazo = f"{CONFIRM_TOKEN_EXPIRE_MINUTES} minutos"
+        link = (
+            f"{PUBLIC_API_URL}/auth/confirm-email"
+            f"?token={empresa.token_confirmacao_email}"
+        )
+        prazo = formatar_prazo(CONFIRM_TOKEN_EXPIRE_MINUTES)
 
         if destino:
             assunto = "ArClear: confirme o novo e-mail da sua empresa"

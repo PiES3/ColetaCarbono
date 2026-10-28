@@ -43,5 +43,4 @@ def listar_materiais(db: Annotated[Session, Depends(get_db)]):
     Lista todos os materiais cadastrados.
     Utilizado pela aplicação móvel para popular as listas de seleção (dropdowns).
     """
-    materiais = db.query(Material).all()
-    return materiais
+    return db.query(Material).order_by(Material.categoria).all()

@@ -1,16 +1,14 @@
-import os
-from dotenv import load_dotenv
-
 from src.app import app
+from src.core.config import SERVER_IP_ADDR, SERVER_PORT, SERVER_RELOAD
 
-load_dotenv()
+__all__ = ["app"]
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
         "main:app",
-        host=os.getenv(key="SERVER_IP_ADDR", default="127.0.0.1"),
-        port=int(os.getenv(key="SERVER_PORT", default=8000)),
-        reload=True,
+        host=SERVER_IP_ADDR,
+        port=SERVER_PORT,
+        reload=SERVER_RELOAD,
     )

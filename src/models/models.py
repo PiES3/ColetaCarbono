@@ -28,14 +28,16 @@ class Empresa(Base, TimestampMixin):
     __tablename__ = "empresas"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
-    prefeitura_id: Mapped[str] = mapped_column(ForeignKey("prefeituras.id"))
+    prefeitura_id: Mapped[str] = mapped_column(
+        ForeignKey("prefeituras.id"), nullable=False, index=True
+    )
 
     cnpj: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     razao_social: Mapped[str] = mapped_column(String, nullable=False)
-    nome_fantasia: Mapped[str] = mapped_column(String, nullable=True)
+    nome_fantasia: Mapped[str | None] = mapped_column(String, nullable=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    telefone: Mapped[str] = mapped_column(String, nullable=True)
-    endereco: Mapped[str] = mapped_column(String, nullable=True)
+    telefone: Mapped[str | None] = mapped_column(String, nullable=True)
+    endereco: Mapped[str | None] = mapped_column(String, nullable=True)
     pwd_hash: Mapped[str] = mapped_column(String, nullable=False)
 
     empresa_status: Mapped[StatusVinculo] = mapped_column(
@@ -87,8 +89,10 @@ class Registro(Base, TimestampMixin):
     __tablename__ = "registros"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
-    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"))
-    material_id: Mapped[str] = mapped_column(ForeignKey("materiais.id"))
+    empresa_id: Mapped[str] = mapped_column(
+        ForeignKey("empresas.id"), nullable=False, index=True
+    )
+    material_id: Mapped[str] = mapped_column(ForeignKey("materiais.id"), nullable=False)
 
     validador_id: Mapped[str | None] = mapped_column(
         ForeignKey("usuarios_admin.id"), nullable=True
@@ -109,6 +113,9 @@ class Registro(Base, TimestampMixin):
     volume_validado: Mapped[float | None] = mapped_column(Float, nullable=True)
     valorestimado: Mapped[float | None] = mapped_column(Float, nullable=True)
     carbonoevitado: Mapped[float | None] = mapped_column(Float, nullable=True)
+    _data_validacao: Mapped[datetime | None] = mapped_column(
+        "data_validacao", DateTime, nullable=True
+    )
 
     empresa: Mapped[Empresa] = relationship(back_populates="registros")
     material: Mapped[Material] = relationship(back_populates="registros")
@@ -118,12 +125,58 @@ class Registro(Base, TimestampMixin):
         foreign_keys=[criado_por_gestor_id]
     )
 
+    @property
+    def inserido_pela_prefeitura(self) -> bool:
+        return self.criado_por_gestor_id is not None
+
+    @property
+    def origem(self) -> str:
+        return "PREFEITURA" if self.criado_por_gestor_id else "EMPRESA"
+
+    @property
+    def nome_gestor(self) -> str | None:
+        return self.criador_gestor.nome if self.criador_gestor else None
+
+    @property
+    def status(self) -> StatusValidacao:
+        return self.status_validacao
+
+    @property
+    def motivo(self) -> str | None:
+        return self.motivo_rejeicao
+
+    @property
+    def data_validacao(self) -> datetime | None:
+        if self.status_validacao == StatusValidacao.VALIDADO:
+            return self._data_validacao or self.updated_at
+        return None
+
+    @data_validacao.setter
+    def data_validacao(self, value: datetime | None) -> None:
+        self._data_validacao = value
+
+    @property
+    def data_hora_validacao(self) -> datetime | None:
+        return self.data_validacao
+
+    @property
+    def nome_validador(self) -> str | None:
+        if self.status_validacao == StatusValidacao.VALIDADO and self.validador:
+            return self.validador.nome
+        return None
+
+    @property
+    def validador_nome(self) -> str | None:
+        return self.nome_validador
+
 
 class UsuarioAdmin(Base, TimestampMixin):
     __tablename__ = "usuarios_admin"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
-    id_prefeitura: Mapped[str] = mapped_column(ForeignKey("prefeituras.id"))
+    id_prefeitura: Mapped[str] = mapped_column(
+        ForeignKey("prefeituras.id"), nullable=False
+    )
 
     nome: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
@@ -137,7 +190,7 @@ class UsuarioEmpresa(Base, TimestampMixin):
     __tablename__ = "usuarios_empresa"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
-    id_empresa: Mapped[str] = mapped_column(ForeignKey("empresas.id"))
+    id_empresa: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False)
 
     nome: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)

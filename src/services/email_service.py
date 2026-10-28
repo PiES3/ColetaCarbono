@@ -4,6 +4,14 @@ from email.message import EmailMessage
 
 from loguru import logger
 
+SMTP_TIMEOUT_SEGUNDOS = 10
+PORTA_SMTP_SSL = 465
+
+
+def _starttls_ativo() -> bool:
+    valor = os.getenv("SMTP_STARTTLS", "true").strip().lower()
+    return valor not in ("0", "false", "no", "nao", "não", "off")
+
 
 class EmailService:
     def enviar(self, destinatario: str, assunto: str, corpo: str) -> bool:
@@ -29,12 +37,12 @@ class EmailService:
         mensagem.set_content(corpo)
 
         try:
-            if porta == 465:
-                conexao = smtplib.SMTP_SSL(host, porta, timeout=10)
+            if porta == PORTA_SMTP_SSL:
+                conexao = smtplib.SMTP_SSL(host, porta, timeout=SMTP_TIMEOUT_SEGUNDOS)
             else:
-                conexao = smtplib.SMTP(host, porta, timeout=10)
+                conexao = smtplib.SMTP(host, porta, timeout=SMTP_TIMEOUT_SEGUNDOS)
             with conexao as servidor:
-                if porta != 465 and os.getenv("SMTP_STARTTLS", "true") != "false":
+                if porta != PORTA_SMTP_SSL and _starttls_ativo():
                     servidor.starttls()
                 if usuario:
                     servidor.login(usuario, os.getenv("SMTP_PASSWORD", ""))

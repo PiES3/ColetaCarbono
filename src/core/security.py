@@ -1,5 +1,4 @@
 import hashlib
-import os
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -10,19 +9,58 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from src.core.config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    CONFIRM_TOKEN_EXPIRE_MINUTES,
+    RESET_TOKEN_EXPIRE_MINUTES,
+    SECRET_KEY,
+)
 from src.core.database import get_db
 from src.models.models import Empresa, UsuarioAdmin, UsuarioEmpresa
 from src.schemas.enums import StatusVinculo
 
-SECRET_KEY = os.getenv(
-    "SECRET_KEY", "coleta-carbono-secret-key-super-secure-at-least-32-chars-long"
-)
+__all__ = [
+    "ACCESS_TOKEN_EXPIRE_MINUTES",
+    "ALGORITHM",
+    "CONFIRM_TOKEN_EXPIRE_MINUTES",
+    "RESET_TOKEN_EXPIRE_MINUTES",
+    "create_access_token",
+    "decode_access_token",
+    "get_current_user",
+    "get_current_user_optional",
+    "get_password_hash_signature",
+    "hash_password",
+    "require_empresa",
+    "require_gestor",
+    "require_superuser",
+    "validate_password_complexity",
+    "verify_password",
+]
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
-RESET_TOKEN_EXPIRE_MINUTES = int(os.getenv("RESET_TOKEN_EXPIRE_MINUTES", "15"))
-CONFIRM_TOKEN_EXPIRE_MINUTES = int(os.getenv("CONFIRM_TOKEN_EXPIRE_MINUTES", "1440"))
+SENHA_TAMANHO_MIN = 8
+# O bcrypt considera apenas os primeiros 72 bytes da senha.
+SENHA_BYTES_MAX = 72
 
 http_bearer = HTTPBearer(auto_error=False)
+
+REGRAS_SENHA: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"[A-Z]"), "deve conter pelo menos uma letra maiúscula."),
+    (re.compile(r"[a-z]"), "deve conter pelo menos uma letra minúscula."),
+    (re.compile(r"\d"), "deve conter pelo menos um número."),
+    (
+        re.compile(r"[!@#$%^&*(),.?\":{}|<>\-_+=\[\]\\/`~]"),
+        "deve conter pelo menos um caractere especial (!@#$%^&* etc.).",
+    ),
+)
+
+
+def _nao_autorizado(detalhe: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detalhe,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def get_password_hash_signature(hashed_password: str) -> str:
@@ -34,61 +72,47 @@ def validate_password_complexity(password: str, rotulo: str = "A nova senha") ->
     """
     Valida os requisitos mínimos de complexidade da senha, no cadastro e na
     redefinição:
-    - No mínimo 8 caracteres
+    - No mínimo 8 caracteres (e no máximo 72 bytes, limite do bcrypt)
     - Pelo menos uma letra maiúscula
     - Pelo menos uma letra minúscula
     - Pelo menos um dígito numérico
     - Pelo menos um caractere especial (!@#$%^&* etc.)
     """
-    if len(password) < 8:
+    if len(password) < SENHA_TAMANHO_MIN:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{rotulo} deve ter no mínimo 8 caracteres.",
+            detail=f"{rotulo} deve ter no mínimo {SENHA_TAMANHO_MIN} caracteres.",
         )
-    if not re.search(r"[A-Z]", password):
+    if len(password.encode("utf-8")) > SENHA_BYTES_MAX:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{rotulo} deve conter pelo menos uma letra maiúscula.",
+            detail=f"{rotulo} deve ter no máximo {SENHA_BYTES_MAX} caracteres.",
         )
-    if not re.search(r"[a-z]", password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{rotulo} deve conter pelo menos uma letra minúscula.",
-        )
-    if not re.search(r"\d", password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{rotulo} deve conter pelo menos um número.",
-        )
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>\-_+=\[\]\\/`~]", password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"{rotulo} deve conter pelo menos um caractere especial "
-                "(!@#$%^&* etc.)."
-            ),
-        )
+    for padrao, mensagem in REGRAS_SENHA:
+        if not padrao.search(password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{rotulo} {mensagem}",
+            )
 
 
 def hash_password(password: str) -> str:
     """Gera o hash da senha usando bcrypt."""
-    pwd_bytes = password.encode("utf-8")
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifica se a senha em texto claro bate com o hash."""
+def verify_password(plain_password: str, hashed_password: str | None) -> bool:
+    """Verifica se a senha em texto claro bate com o hash bcrypt."""
     if not hashed_password:
         return False
-    # Compatibilidade retroativa para dados mockados em seeds dev
-    if hashed_password.startswith("hashed_"):
-        return f"hashed_{plain_password}" == hashed_password
+    senha = plain_password.encode("utf-8")
+    if len(senha) > SENHA_BYTES_MAX:
+        # bcrypt >= 5 rejeita senhas maiores que 72 bytes com ValueError.
+        return False
     try:
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
-        )
-    except Exception:
+        return bcrypt.checkpw(senha, hashed_password.encode("utf-8"))
+    except ValueError:
+        # Hash malformado no banco: trata como senha incorreta.
         return False
 
 
@@ -96,14 +120,11 @@ def create_access_token(
     data: dict[str, Any], expires_delta: timedelta | None = None
 ) -> str:
     """Cria um token JWT com data de expiração e claims do usuário."""
-    to_encode = data.copy()
-    now = datetime.now(UTC)
-    if expires_delta:
-        expire = now + expires_delta
-    else:
-        expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": now})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    agora = datetime.now(UTC)
+    expira = agora + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    return jwt.encode(
+        {**data, "exp": expira, "iat": agora}, SECRET_KEY, algorithm=ALGORITHM
+    )
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -111,11 +132,79 @@ def decode_access_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido ou expirado.",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from None
+        raise _nao_autorizado("Token inválido ou expirado.") from None
+
+
+def _checar_assinatura_senha(token_sig: str | None, senha_hash: str) -> None:
+    """Invalida tokens emitidos antes da última troca de senha."""
+    if not token_sig or token_sig != get_password_hash_signature(senha_hash):
+        raise _nao_autorizado(
+            "Sessão invalidada após alteração de senha. Faça login novamente."
+        )
+
+
+def _usuario_prefeitura(db: Session, user_id: str, token_sig: str | None) -> dict:
+    admin = db.get(UsuarioAdmin, user_id)
+    if not admin:
+        raise _nao_autorizado("Administrador da prefeitura não encontrado.")
+    _checar_assinatura_senha(token_sig, admin.senha_hash)
+    return {
+        "id": admin.id,
+        "email": admin.email,
+        "nome": admin.nome,
+        "user_type": "PREFEITURA",
+        "is_superuser": True,
+        "prefeitura_id": admin.id_prefeitura,
+        "prefeitura_nome": admin.prefeitura.nome,
+        "status_vinculo": None,
+        "instance": admin,
+    }
+
+
+def _usuario_empresa(db: Session, user_id: str, token_sig: str | None) -> dict:
+    empresa = db.get(Empresa, user_id)
+    if not empresa:
+        raise _nao_autorizado("Empresa não encontrada.")
+    _checar_assinatura_senha(token_sig, empresa.pwd_hash)
+    return {
+        "id": empresa.id,
+        "email": empresa.email,
+        "nome": empresa.nome_fantasia or empresa.razao_social,
+        "user_type": "EMPRESA",
+        "is_superuser": False,
+        "empresa_id": empresa.id,
+        "prefeitura_id": empresa.prefeitura_id,
+        "prefeitura_nome": empresa.prefeitura.nome,
+        "status_vinculo": empresa.empresa_status,
+        "instance": empresa,
+    }
+
+
+def _usuario_da_empresa(db: Session, user_id: str, token_sig: str | None) -> dict:
+    usuario = db.get(UsuarioEmpresa, user_id)
+    if not usuario:
+        raise _nao_autorizado("Usuário da empresa não encontrado.")
+    _checar_assinatura_senha(token_sig, usuario.senha_hash)
+    empresa = usuario.empresa
+    return {
+        "id": usuario.id,
+        "email": usuario.email,
+        "nome": usuario.nome,
+        "user_type": "USUARIO_EMPRESA",
+        "is_superuser": False,
+        "empresa_id": usuario.id_empresa,
+        "prefeitura_id": empresa.prefeitura_id,
+        "prefeitura_nome": empresa.prefeitura.nome,
+        "status_vinculo": empresa.empresa_status,
+        "instance": usuario,
+    }
+
+
+_CARREGADORES_DE_USUARIO = {
+    "PREFEITURA": _usuario_prefeitura,
+    "EMPRESA": _usuario_empresa,
+    "USUARIO_EMPRESA": _usuario_da_empresa,
+}
 
 
 def get_current_user(
@@ -124,124 +213,23 @@ def get_current_user(
 ) -> dict[str, Any]:
     """
     Dependência FastAPI que extrai o usuário atual a partir do Bearer Token.
-    Funciona tanto para usuários da Prefeitura quanto para Empresas.
+    Funciona para usuários da Prefeitura, Empresas e usuários de Empresas.
     """
     if not auth or not auth.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Autenticação necessária.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _nao_autorizado("Autenticação necessária.")
 
     payload = decode_access_token(auth.credentials)
-    user_id: str | None = payload.get("sub")
-    user_type: str | None = payload.get("user_type")
+    user_id = payload.get("sub")
+    user_type = payload.get("user_type")
 
-    if not user_id or not user_type:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token com formato inválido.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if not isinstance(user_id, str) or not isinstance(user_type, str):
+        raise _nao_autorizado("Token com formato inválido.")
 
-    token_sig = payload.get("pwd_sig")
+    carregar = _CARREGADORES_DE_USUARIO.get(user_type)
+    if carregar is None:
+        raise _nao_autorizado("Tipo de usuário desconhecido no token.")
 
-    if user_type == "PREFEITURA":
-        admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.id == user_id).first()
-        if not admin:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Administrador da prefeitura não encontrado.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        current_sig = get_password_hash_signature(admin.senha_hash)
-        if not token_sig or token_sig != current_sig:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=(
-                    "Sessão invalidada após alteração de senha. Faça login novamente."
-                ),
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return {
-            "id": admin.id,
-            "email": admin.email,
-            "nome": admin.nome,
-            "user_type": "PREFEITURA",
-            "is_superuser": True,
-            "prefeitura_id": admin.id_prefeitura,
-            "prefeitura_nome": admin.prefeitura.nome,
-            "status_vinculo": None,
-            "instance": admin,
-        }
-
-    if user_type == "EMPRESA":
-        empresa = db.query(Empresa).filter(Empresa.id == user_id).first()
-        if not empresa:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Empresa não encontrada.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        current_sig = get_password_hash_signature(empresa.pwd_hash)
-        if not token_sig or token_sig != current_sig:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=(
-                    "Sessão invalidada após alteração de senha. Faça login novamente."
-                ),
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return {
-            "id": empresa.id,
-            "email": empresa.email,
-            "nome": empresa.nome_fantasia or empresa.razao_social,
-            "user_type": "EMPRESA",
-            "is_superuser": False,
-            "empresa_id": empresa.id,
-            "prefeitura_id": empresa.prefeitura_id,
-            "prefeitura_nome": empresa.prefeitura.nome,
-            "status_vinculo": empresa.empresa_status,
-            "instance": empresa,
-        }
-
-    if user_type == "USUARIO_EMPRESA":
-        user_empresa = (
-            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.id == user_id).first()
-        )
-        if not user_empresa:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Usuário da empresa não encontrado.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        current_sig = get_password_hash_signature(user_empresa.senha_hash)
-        if not token_sig or token_sig != current_sig:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=(
-                    "Sessão invalidada após alteração de senha. Faça login novamente."
-                ),
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return {
-            "id": user_empresa.id,
-            "email": user_empresa.email,
-            "nome": user_empresa.nome,
-            "user_type": "USUARIO_EMPRESA",
-            "is_superuser": False,
-            "empresa_id": user_empresa.id_empresa,
-            "prefeitura_id": user_empresa.empresa.prefeitura_id,
-            "prefeitura_nome": user_empresa.empresa.prefeitura.nome,
-            "status_vinculo": user_empresa.empresa.empresa_status,
-            "instance": user_empresa,
-        }
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Tipo de usuário desconhecido no token.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    return carregar(db, user_id, payload.get("pwd_sig"))
 
 
 def require_superuser(
@@ -254,6 +242,34 @@ def require_superuser(
             detail="Acesso restrito à Prefeitura (Superusuário).",
         )
     return current_user
+
+
+def require_gestor(
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Exige que o usuário autenticado seja um Gestor da Prefeitura."""
+    if (
+        not current_user.get("is_superuser")
+        or current_user.get("user_type") != "PREFEITURA"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso restrito a gestores da prefeitura.",
+        )
+    return current_user
+
+
+def get_current_user_optional(
+    auth: Annotated[HTTPAuthorizationCredentials | None, Depends(http_bearer)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, Any] | None:
+    """Extrai o usuário autenticado se presente; retorna None se anônimo."""
+    if not auth or not auth.credentials:
+        return None
+    try:
+        return get_current_user(auth=auth, db=db)
+    except HTTPException:
+        return None
 
 
 def require_empresa(

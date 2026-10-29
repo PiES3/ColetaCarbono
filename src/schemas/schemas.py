@@ -46,6 +46,11 @@ class MaterialUpdate(BaseModel):
     categoria: str | None = Field(default=None, min_length=1, max_length=100)
     fator_emissaoipcc: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
+    @field_validator("categoria", mode="before")
+    @classmethod
+    def limpar_categoria(cls, valor: object) -> object:
+        return valor.strip() if isinstance(valor, str) else valor
+
 
 class MaterialResponse(MaterialBase, TimestampSchemaMixin):
     id: str

@@ -1162,3 +1162,96 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert dash_emp["total_empresas"] is None
     assert dash_emp["ranking_empresas"] == []
     assert dash_emp["resumo_registros"]["total_registros"] > 0
+
+
+# ============================================================================
+# Testes do CRUD Completo de Materiais
+# ============================================================================
+
+
+def test_crud_completo_de_materiais(client: TestClient):
+    token_gestor = _obter_token_gestor(client)
+    token_empresa = _obter_token_empresa(client)
+    headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
+    headers_empresa = {"Authorization": f"Bearer {token_empresa}"}
+
+    # 1. Criar novo material (Prefeitura)
+    resp_create = client.post(
+        "/materiais/",
+        json={"categoria": "  Alumínio  ", "fator_emissaoipcc": 2.5},
+        headers=headers_gestor,
+    )
+    assert resp_create.status_code == 201
+    criado = resp_create.json()
+    material_id = criado["id"]
+    assert criado["categoria"] == "Alumínio"
+    assert criado["fator_emissaoipcc"] == 2.5
+
+    # 2. Impede categoria duplicada (case-insensitive)
+    resp_dup = client.post(
+        "/materiais/",
+        json={"categoria": "alumínio", "fator_emissaoipcc": 3.0},
+        headers=headers_gestor,
+    )
+    assert resp_dup.status_code == 400
+    assert resp_dup.json()["detail"] == "Já existe um material com esta categoria."
+
+    # 3. Obter material por ID (acessível por empresa e prefeitura)
+    resp_get = client.get(f"/materiais/{material_id}", headers=headers_empresa)
+    assert resp_get.status_code == 200
+    assert resp_get.json()["id"] == material_id
+    assert resp_get.json()["categoria"] == "Alumínio"
+
+    assert (
+        client.get("/materiais/inexistente-999", headers=headers_empresa).status_code
+        == 404
+    )
+
+    # 4. Atualizar material (restrito à prefeitura)
+    assert (
+        client.patch(
+            f"/materiais/{material_id}",
+            json={"fator_emissaoipcc": 9.0},
+            headers=headers_empresa,
+        ).status_code
+        == 403
+    )
+
+    resp_patch = client.patch(
+        f"/materiais/{material_id}",
+        json={"categoria": "Alumínio Reciclado", "fator_emissaoipcc": 3.2},
+        headers=headers_gestor,
+    )
+    assert resp_patch.status_code == 200
+    assert resp_patch.json()["categoria"] == "Alumínio Reciclado"
+    assert resp_patch.json()["fator_emissaoipcc"] == 3.2
+
+    # Não permite renomear para categoria já existente em outro material
+    resp_patch_dup = client.patch(
+        f"/materiais/{material_id}",
+        json={"categoria": "Papel"},
+        headers=headers_gestor,
+    )
+    assert resp_patch_dup.status_code == 400
+
+    # 5. Excluir material em uso por registros -> 400
+    resp_del_em_uso = client.delete("/materiais/papel", headers=headers_gestor)
+    assert resp_del_em_uso.status_code == 400
+    assert (
+        resp_del_em_uso.json()["detail"]
+        == "Não é possível excluir um material que possui registros vinculados."
+    )
+
+    # 6. Empresa não pode excluir material -> 403
+    assert (
+        client.delete(f"/materiais/{material_id}", headers=headers_empresa).status_code
+        == 403
+    )
+
+    # 7. Excluir material sem registros vinculados -> 204
+    resp_del = client.delete(f"/materiais/{material_id}", headers=headers_gestor)
+    assert resp_del.status_code == 204
+    assert (
+        client.get(f"/materiais/{material_id}", headers=headers_gestor).status_code
+        == 404
+    )

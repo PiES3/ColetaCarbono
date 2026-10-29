@@ -355,3 +355,63 @@ class ResetPasswordRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ResumoRegistrosResponse(BaseModel):
+    total_registros: int = 0
+    registros_pendentes: int = 0
+    registros_validados: int = 0
+    registros_rejeitados: int = 0
+    volume_total_declarado: float = 0.0
+    volume_total_validado: float = 0.0
+    carbono_total_evitado: float = 0.0
+    valor_total_estimado: float = 0.0
+    percentual_medio_reciclado: float = 0.0
+
+
+class EstatisticaMaterialItem(BaseModel):
+    material_id: str
+    categoria: str
+    total_registros: int = 0
+    volume_declarado: float = 0.0
+    volume_validado: float = 0.0
+    carbono_evitado: float = 0.0
+    valor_estimado: float = 0.0
+
+
+class EstatisticaPeriodoItem(BaseModel):
+    periodo: str
+    total_registros: int = 0
+    registros_validados: int = 0
+    registros_pendentes: int = 0
+    registros_rejeitados: int = 0
+    volume_declarado: float = 0.0
+    volume_validado: float = 0.0
+    carbono_evitado: float = 0.0
+    valor_estimado: float = 0.0
+
+
+class EstatisticaEmpresaItem(BaseModel):
+    empresa_id: str
+    razao_social: str
+    nome_fantasia: str | None = None
+    cnpj: str
+    total_registros: int = 0
+    registros_validados: int = 0
+    registros_pendentes: int = 0
+    registros_rejeitados: int = 0
+    volume_declarado: float = 0.0
+    volume_validado: float = 0.0
+    carbono_evitado: float = 0.0
+    valor_estimado: float = 0.0
+
+
+class DashboardResumoResponse(BaseModel):
+    escopo: str
+    empresas_por_status: dict[str, int] | None = None
+    total_empresas: int | None = None
+    registros_por_status: dict[str, int]
+    resumo_registros: ResumoRegistrosResponse
+    por_material: list[EstatisticaMaterialItem] = []
+    por_periodo: list[EstatisticaPeriodoItem] = []
+    ranking_empresas: list[EstatisticaEmpresaItem] = []

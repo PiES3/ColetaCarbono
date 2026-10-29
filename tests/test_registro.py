@@ -1047,3 +1047,118 @@ def test_empresa_acompanhamento_aliases_e_seguranca(client: TestClient):
     # Sem autenticação e sem empresa_id -> 401
     resp_unauth = client.get("/registros/acompanhamento")
     assert resp_unauth.status_code == 401
+
+
+# ============================================================================
+# Testes de Estatísticas e Dashboard Completo
+# ============================================================================
+
+
+def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        "src.services.services.obter_cotacao_dolar", lambda *_args, **_kw: 5.0
+    )
+
+    token_gestor = _obter_token_gestor(client)
+    token_empresa = _obter_token_empresa(client)
+    headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
+    headers_empresa = {"Authorization": f"Bearer {token_empresa}"}
+
+    # Sem autenticação -> 401
+    assert client.get("/dashboard/").status_code == 401
+    assert client.get("/registros/estatisticas/resumo").status_code == 401
+    assert client.get("/registros/estatisticas/status").status_code == 401
+    assert client.get("/registros/estatisticas/por-material").status_code == 401
+    assert client.get("/registros/estatisticas/por-periodo").status_code == 401
+    assert client.get("/registros/estatisticas/por-empresa").status_code == 401
+    assert client.get("/empresas/estatisticas/ranking").status_code == 401
+
+    # Empresa não pode acessar rotas exclusivas da prefeitura -> 403
+    assert (
+        client.get(
+            "/registros/estatisticas/por-empresa", headers=headers_empresa
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/empresas/estatisticas/ranking", headers=headers_empresa
+        ).status_code
+        == 403
+    )
+
+    # Resumo geral da prefeitura
+    resp_resumo = client.get("/registros/estatisticas/resumo", headers=headers_gestor)
+    assert resp_resumo.status_code == 200
+    resumo = resp_resumo.json()
+    assert resumo["total_registros"] == (
+        resumo["registros_pendentes"]
+        + resumo["registros_validados"]
+        + resumo["registros_rejeitados"]
+    )
+    assert resumo["volume_total_declarado"] > 0
+    assert resumo["volume_total_validado"] > 0
+    assert resumo["carbono_total_evitado"] > 0
+    assert resumo["valor_total_estimado"] > 0
+
+    # Contagem por status
+    resp_status = client.get("/registros/estatisticas/status", headers=headers_gestor)
+    assert resp_status.status_code == 200
+    contagens_status = resp_status.json()
+    assert set(contagens_status) >= {"PENDENTE", "VALIDADO", "REJEITADO"}
+    assert contagens_status["VALIDADO"] == resumo["registros_validados"]
+
+    # Detalhamento por material
+    resp_mat = client.get(
+        "/registros/estatisticas/por-material", headers=headers_gestor
+    )
+    assert resp_mat.status_code == 200
+    materiais = resp_mat.json()
+    assert len(materiais) >= 2
+    assert {m["material_id"] for m in materiais} >= {"papel", "plastico"}
+
+    # Evolução por período
+    resp_per = client.get(
+        "/registros/estatisticas/por-periodo?periodo_inicio=2026-05&periodo_fim=2026-10",
+        headers=headers_gestor,
+    )
+    assert resp_per.status_code == 200
+    periodos = resp_per.json()
+    assert len(periodos) >= 2
+    assert [p["periodo"] for p in periodos] == sorted(p["periodo"] for p in periodos)
+
+    # Ranking de empresas (prefeitura)
+    resp_rank = client.get("/empresas/estatisticas/ranking", headers=headers_gestor)
+    assert resp_rank.status_code == 200
+    ranking = resp_rank.json()
+    assert any(item["empresa_id"] == "empresa-demo" for item in ranking)
+    assert all(item["empresa_id"] != "empresa-quixeramobim" for item in ranking)
+
+    resp_por_emp = client.get(
+        "/registros/estatisticas/por-empresa", headers=headers_gestor
+    )
+    assert resp_por_emp.status_code == 200
+    assert resp_por_emp.json() == ranking
+
+    # Dashboard consolidado (visão Prefeitura)
+    resp_dash_pref = client.get("/dashboard/", headers=headers_gestor)
+    assert resp_dash_pref.status_code == 200
+    dash_pref = resp_dash_pref.json()
+    assert dash_pref["escopo"] == "PREFEITURA"
+    assert dash_pref["empresas_por_status"] is not None
+    assert dash_pref["empresas_por_status"]["APROVADA"] >= 1
+    assert dash_pref["total_empresas"] >= 1
+    assert dash_pref["resumo_registros"] == resumo
+    assert len(dash_pref["por_material"]) >= 2
+    assert len(dash_pref["por_periodo"]) >= 2
+    assert len(dash_pref["ranking_empresas"]) >= 1
+
+    # Dashboard consolidado (visão Empresa: isolada aos próprios dados)
+    resp_dash_emp = client.get("/dashboard/resumo", headers=headers_empresa)
+    assert resp_dash_emp.status_code == 200
+    dash_emp = resp_dash_emp.json()
+    assert dash_emp["escopo"] == "EMPRESA"
+    assert dash_emp["empresas_por_status"] is None
+    assert dash_emp["total_empresas"] is None
+    assert dash_emp["ranking_empresas"] == []
+    assert dash_emp["resumo_registros"]["total_registros"] > 0

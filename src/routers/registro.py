@@ -15,6 +15,9 @@ from src.core.security import (
 from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao
 from src.schemas.schemas import (
+    EstatisticaEmpresaItem,
+    EstatisticaMaterialItem,
+    EstatisticaPeriodoItem,
     RegistroAcompanhamentoResponse,
     RegistroCreate,
     RegistroGestorCreate,
@@ -22,7 +25,9 @@ from src.schemas.schemas import (
     RegistroResponse,
     RegistroValidacaoRequest,
     RegistroValidacaoUpdate,
+    ResumoRegistrosResponse,
 )
+from src.services.estatisticas_service import estatisticas_service
 from src.services.services import registro_service
 
 router = APIRouter(prefix="/registros", tags=["Registros"])
@@ -270,6 +275,147 @@ def acompanhar_registros_empresa(
         query = query.filter(Registro.criado_por_gestor_id.isnot(None))
 
     return query.order_by(Registro.created_at.desc()).offset(skip).limit(limit).all()
+
+
+@router.get("/estatisticas/resumo", response_model=ResumoRegistrosResponse)
+def estatisticas_resumo_registros(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    empresa_id: str | None = None,
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    material_id: str | None = None,
+):
+    """
+    Retorna os indicadores gerais (totais de registros, volumes declarados e
+    validados, carbono evitado, valor estimado em BRL e percentual médio
+    reciclado) para os cards do dashboard da prefeitura ou da empresa.
+    """
+    return estatisticas_service.resumo_registros(
+        db=db,
+        usuario=usuario,
+        empresa_id=empresa_id,
+        periodo=periodo,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+        material_id=material_id,
+    )
+
+
+@router.get("/estatisticas/status")
+def estatisticas_registros_por_status(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    empresa_id: str | None = None,
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    material_id: str | None = None,
+) -> dict[str, int]:
+    """
+    Retorna a contagem de registros agrupados por status de validação
+    (PENDENTE, VALIDADO, REJEITADO).
+    """
+    return estatisticas_service.registros_por_status(
+        db=db,
+        usuario=usuario,
+        empresa_id=empresa_id,
+        periodo=periodo,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+        material_id=material_id,
+    )
+
+
+@router.get(
+    "/estatisticas/por-material",
+    response_model=list[EstatisticaMaterialItem],
+)
+@router.get(
+    "/estatisticas/materiais",
+    response_model=list[EstatisticaMaterialItem],
+    include_in_schema=False,
+)
+def estatisticas_registros_por_material(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    empresa_id: str | None = None,
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+):
+    """
+    Retorna o detalhamento de registros, volumes, carbono evitado e valor
+    estimado agrupados por categoria de material.
+    """
+    return estatisticas_service.por_material(
+        db=db,
+        usuario=usuario,
+        empresa_id=empresa_id,
+        periodo=periodo,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+    )
+
+
+@router.get(
+    "/estatisticas/por-periodo",
+    response_model=list[EstatisticaPeriodoItem],
+)
+@router.get(
+    "/estatisticas/periodos",
+    response_model=list[EstatisticaPeriodoItem],
+    include_in_schema=False,
+)
+def estatisticas_registros_por_periodo(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    empresa_id: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    material_id: str | None = None,
+):
+    """
+    Retorna a evolução temporal (por período AAAA-MM) de registros, volumes,
+    carbono evitado e valor estimado para gráficos de linha/barra do dashboard.
+    """
+    return estatisticas_service.por_periodo(
+        db=db,
+        usuario=usuario,
+        empresa_id=empresa_id,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+        material_id=material_id,
+    )
+
+
+@router.get(
+    "/estatisticas/por-empresa",
+    response_model=list[EstatisticaEmpresaItem],
+)
+def estatisticas_registros_por_empresa(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    material_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    """
+    Retorna o consolidado de registros, volumes e carbono evitado por empresa
+    vinculada ao município da prefeitura autenticada.
+    """
+    return estatisticas_service.ranking_empresas(
+        db=db,
+        prefeitura_id=usuario["prefeitura_id"],
+        periodo=periodo,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+        material_id=material_id,
+        limit=limit,
+    )
 
 
 @router.get("/", response_model=list[RegistroResponse])

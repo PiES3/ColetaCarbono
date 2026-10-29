@@ -13,11 +13,13 @@ from src.schemas.schemas import (
     EmpresaCreate,
     EmpresaResponse,
     EmpresaUpdate,
+    EstatisticaEmpresaItem,
     HistoricoCadastroResponse,
 )
 from src.schemas.validacao import validar_motivo_recusa
 from src.services.auth_service import auth_service
 from src.services.empresa_service import empresa_service
+from src.services.estatisticas_service import estatisticas_service
 
 router = APIRouter(prefix="/empresas", tags=["Empresas"])
 
@@ -112,6 +114,31 @@ def historico_da_empresa(
     para a mais antiga, com autor e data/hora (HU006).
     """
     return empresa_service.listar_historico(db, usuario["empresa_id"])
+
+
+@router.get("/estatisticas/ranking", response_model=list[EstatisticaEmpresaItem])
+def ranking_empresas_por_impacto(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    material_id: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    """
+    Retorna o ranking das empresas do município ordenadas por carbono evitado
+    e volume validado, útil para gráficos e tabelas do dashboard da prefeitura.
+    """
+    return estatisticas_service.ranking_empresas(
+        db=db,
+        prefeitura_id=usuario["prefeitura_id"],
+        periodo=periodo,
+        periodo_inicio=periodo_inicio,
+        periodo_fim=periodo_fim,
+        material_id=material_id,
+        limit=limit,
+    )
 
 
 @router.get("/estatisticas/status")

@@ -10,7 +10,7 @@ from src.core.base import Base
 from src.core.config import CORS_ORIGINS, SEED_DEV_DATA
 from src.core.database import IS_SQLITE, engine
 from src.models import models  # noqa: F401  (registra as tabelas no metadata)
-from src.routers import auth, empresas, materiais, prefeituras, registro
+from src.routers import auth, dashboard, empresas, materiais, prefeituras, registro
 
 SRC_DIR = Path(__file__).resolve().parent
 SCRIPT_SCHEMA = SRC_DIR / "create_db.sql"
@@ -90,3 +90,4 @@ app.include_router(registro.router)
 app.include_router(empresas.router)
 app.include_router(materiais.router)
 app.include_router(prefeituras.router)
+app.include_router(dashboard.router)

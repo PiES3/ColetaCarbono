@@ -9,7 +9,12 @@ from pydantic import (
     field_validator,
 )
 
-from src.schemas.enums import Perfil, StatusValidacao, StatusVinculo
+from src.schemas.enums import (
+    AgrupamentoRelatorio,
+    Perfil,
+    StatusValidacao,
+    StatusVinculo,
+)
 from src.schemas.validacao import (
     normalizar_cnpj,
     validar_endereco,
@@ -54,6 +59,7 @@ class MaterialUpdate(BaseModel):
 
 class MaterialResponse(MaterialBase, TimestampSchemaMixin):
     id: str
+    cor_conama: str = "#6C757D"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -192,8 +198,44 @@ class EmpresaResponse(TimestampSchemaMixin):
     endereco: str | None = None
     empresa_status: StatusVinculo
     motivo_recusa: str | None = None
+    desassociacao_solicitada: bool = False
+    motivo_desassociacao: str | None = None
+    data_solicitacao_desassociacao: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SolicitarDesassociacaoRequest(BaseModel):
+    motivo: str | None = Field(
+        default=None,
+        max_length=500,
+        validation_alias=AliasChoices("motivo", "motivo_desassociacao"),
+    )
+
+    @field_validator("motivo", mode="before")
+    @classmethod
+    def limpar_motivo(cls, valor: object) -> object:
+        if isinstance(valor, str):
+            texto = valor.strip()
+            return texto or None
+        return valor
+
+
+class DecisaoDesassociacaoRequest(BaseModel):
+    aprovar: bool
+    motivo_resposta: str | None = Field(
+        default=None,
+        max_length=500,
+        validation_alias=AliasChoices("motivo_resposta", "motivo"),
+    )
+
+    @field_validator("motivo_resposta", mode="before")
+    @classmethod
+    def limpar_resposta(cls, valor: object) -> object:
+        if isinstance(valor, str):
+            texto = valor.strip()
+            return texto or None
+        return valor
 
 
 class HistoricoCadastroResponse(BaseModel):
@@ -217,6 +259,7 @@ class RegistroBase(BaseModel):
 class RegistroCreate(RegistroBase):
     empresa_id: str | None = None
     material_id: str
+    client_id: str | None = Field(default=None, max_length=120)
     volume_validado: float | None = None
 
     @field_validator("periodo")
@@ -287,6 +330,7 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     id: str
     empresa_id: str
     material_id: str
+    client_id: str | None = None
     validador_id: str | None = None
     criado_por_gestor_id: str | None = None
     inserido_pela_prefeitura: bool = False
@@ -377,6 +421,7 @@ class ResumoRegistrosResponse(BaseModel):
 class EstatisticaMaterialItem(BaseModel):
     material_id: str
     categoria: str
+    cor_conama: str = "#6C757D"
     total_registros: int = 0
     volume_declarado: float = 0.0
     volume_validado: float = 0.0
@@ -420,3 +465,92 @@ class DashboardResumoResponse(BaseModel):
     por_material: list[EstatisticaMaterialItem] = []
     por_periodo: list[EstatisticaPeriodoItem] = []
     ranking_empresas: list[EstatisticaEmpresaItem] = []
+
+
+class SincronizacaoLoteRequest(BaseModel):
+    registros: list[RegistroCreate] = Field(min_length=1, max_length=500)
+
+
+class ErroSincronizacaoItem(BaseModel):
+    indice: int
+    client_id: str | None = None
+    erro: str
+
+
+class SincronizacaoLoteResponse(BaseModel):
+    total_recebidos: int
+    total_criados: int
+    total_duplicados: int
+    total_erros: int
+    registros: list[RegistroResponse] = []
+    erros: list[ErroSincronizacaoItem] = []
+
+
+class EvolucaoDiariaItem(BaseModel):
+    data: str
+    total_registros: int = 0
+    registros_validados: int = 0
+    volume_declarado: float = 0.0
+    volume_validado: float = 0.0
+    carbono_evitado: float = 0.0
+    valor_estimado: float = 0.0
+
+
+class EvolucaoTemporalResponse(BaseModel):
+    dias: int
+    data_inicio: str
+    data_fim: str
+    volume_periodo_atual: float = 0.0
+    volume_periodo_anterior: float = 0.0
+    variacao_volume_pct: float | None = None
+    carbono_periodo_atual: float = 0.0
+    carbono_periodo_anterior: float = 0.0
+    variacao_carbono_pct: float | None = None
+    serie_diaria: list[EvolucaoDiariaItem] = []
+
+
+class GrupoRelatorioItem(BaseModel):
+    chave_periodo: str
+    rotulo: str
+    total_registros: int = 0
+    registros_validados: int = 0
+    registros_pendentes: int = 0
+    registros_rejeitados: int = 0
+    volume_declarado: float = 0.0
+    volume_validado: float = 0.0
+    carbono_evitado: float = 0.0
+    valor_estimado: float = 0.0
+    por_material: list[EstatisticaMaterialItem] = []
+
+
+class RelatorioConsolidadoResponse(BaseModel):
+    escopo: str
+    entidade_nome: str
+    municipio_nome: str | None = None
+    agrupamento: AgrupamentoRelatorio
+    gerado_em: datetime
+    resumo: ResumoRegistrosResponse
+    por_material: list[EstatisticaMaterialItem] = []
+    grupos: list[GrupoRelatorioItem] = []
+
+
+class HealthLiveResponse(BaseModel):
+    status: str = "ok"
+    servico: str = "ColetaCarbono"
+    versao: str = "0.1.0"
+    timestamp: datetime
+    uptime_segundos: float
+
+
+class ComponenteBancoSaude(BaseModel):
+    status: str
+    dialeto: str
+    conectado: bool
+    schema_integro: bool
+    latencia_ms: float
+    detalhe: str | None = None
+
+
+class HealthStatusResponse(HealthLiveResponse):
+    pronto: bool
+    banco_dados: ComponenteBancoSaude

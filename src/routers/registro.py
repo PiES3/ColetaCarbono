@@ -18,6 +18,7 @@ from src.schemas.schemas import (
     EstatisticaEmpresaItem,
     EstatisticaMaterialItem,
     EstatisticaPeriodoItem,
+    EvolucaoTemporalResponse,
     RegistroAcompanhamentoResponse,
     RegistroCreate,
     RegistroGestorCreate,
@@ -26,6 +27,8 @@ from src.schemas.schemas import (
     RegistroValidacaoRequest,
     RegistroValidacaoUpdate,
     ResumoRegistrosResponse,
+    SincronizacaoLoteRequest,
+    SincronizacaoLoteResponse,
 )
 from src.services.estatisticas_service import estatisticas_service
 from src.services.services import registro_service
@@ -170,6 +173,20 @@ def criar_registro(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    client_id = registro_in.client_id.strip() if registro_in.client_id else None
+    client_id = client_id or None
+    if client_id:
+        existente = (
+            db.query(Registro)
+            .filter(
+                Registro.empresa_id == empresa_id,
+                Registro.client_id == client_id,
+            )
+            .first()
+        )
+        if existente:
+            return existente
+
     if not db.get(Material, registro_in.material_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Material inválido."
@@ -178,6 +195,7 @@ def criar_registro(
     novo_registro = Registro(
         empresa_id=empresa_id,
         material_id=registro_in.material_id,
+        client_id=client_id,
         periodo=registro_in.periodo,
         volume_total_original=registro_in.volume_total,
         percentual_reciclado=registro_in.percentual_reciclado,
@@ -188,6 +206,34 @@ def criar_registro(
     db.refresh(novo_registro)
 
     return novo_registro
+
+
+@router.post(
+    "/sincronizar",
+    response_model=SincronizacaoLoteResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Sincronização em lote de registros coletados offline (Offline-First)",
+)
+@router.post(
+    "/lote",
+    response_model=SincronizacaoLoteResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+def sincronizar_registros_offline(
+    dados: SincronizacaoLoteRequest,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Recebe um lote de registros criados offline pelo aplicativo móvel (RNF#001)
+    e garante idempotência através de `client_id` por empresa.
+    """
+    return registro_service.sincronizar_lote(
+        db=db,
+        empresa_id=usuario["empresa_id"],
+        itens=dados.registros,
+    )
 
 
 @router.get(
@@ -386,6 +432,30 @@ def estatisticas_registros_por_periodo(
         empresa_id=empresa_id,
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
+        material_id=material_id,
+    )
+
+
+@router.get(
+    "/estatisticas/evolucao-diaria",
+    response_model=EvolucaoTemporalResponse,
+)
+def estatisticas_evolucao_diaria(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    dias: Annotated[int, Query(ge=1, le=365)] = 28,
+    empresa_id: str | None = None,
+    material_id: str | None = None,
+):
+    """
+    Retorna a série diária contínua dos últimos `dias` (padrão: 28 dias) para
+    gráficos temporais em tempo real (RF#015).
+    """
+    return estatisticas_service.evolucao_temporal(
+        db=db,
+        usuario=usuario,
+        dias=dias,
+        empresa_id=empresa_id,
         material_id=material_id,
     )
 

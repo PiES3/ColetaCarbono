@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS empresas (
     empresa_status TEXT DEFAULT 'AGUARDANDO_VALIDACAO' 
         CHECK(empresa_status IN ('AGUARDANDO_VALIDACAO', 'APROVADA', 'RECUSADA', 'DESASSOCIADA')),
     motivo_recusa TEXT,
+    desassociacao_solicitada INTEGER NOT NULL DEFAULT 0,
+    motivo_desassociacao TEXT,
+    data_solicitacao_desassociacao DATETIME,
     email_confirmado INTEGER NOT NULL DEFAULT 0,
     email_pendente TEXT,
     token_confirmacao_email TEXT,
@@ -70,6 +73,7 @@ CREATE TABLE IF NOT EXISTS registros (
     id TEXT PRIMARY KEY,
     empresa_id TEXT NOT NULL,
     material_id TEXT NOT NULL,
+    client_id TEXT,
     validador_id TEXT,
     criado_por_gestor_id TEXT,
     periodo TEXT NOT NULL,
@@ -88,7 +92,8 @@ CREATE TABLE IF NOT EXISTS registros (
     FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
     FOREIGN KEY (material_id) REFERENCES materiais(id),
     FOREIGN KEY (validador_id) REFERENCES usuarios_admin(id),
-    FOREIGN KEY (criado_por_gestor_id) REFERENCES usuarios_admin(id)
+    FOREIGN KEY (criado_por_gestor_id) REFERENCES usuarios_admin(id),
+    UNIQUE (empresa_id, client_id)
 );
 
 CREATE TABLE IF NOT EXISTS historico_cadastro (
@@ -110,6 +115,9 @@ CREATE INDEX IF NOT EXISTS ix_empresas_prefeitura_id
 
 CREATE INDEX IF NOT EXISTS ix_registros_empresa_id
     ON registros (empresa_id);
+
+CREATE INDEX IF NOT EXISTS ix_registros_created_at
+    ON registros (created_at);
 
 CREATE INDEX IF NOT EXISTS ix_historico_cadastro_empresa_id
     ON historico_cadastro (empresa_id);

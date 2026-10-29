@@ -19,3 +19,9 @@ class StatusValidacao(StrEnum):
     VALIDADO = "VALIDADO"
     REJEITADO = "REJEITADO"
     RECUSADA = "REJEITADO"
+
+
+class AgrupamentoRelatorio(StrEnum):
+    SEMANAL = "semanal"
+    MENSAL = "mensal"
+    ANUAL = "anual"

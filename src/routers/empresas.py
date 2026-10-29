@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -10,11 +10,13 @@ from src.core.security import require_empresa, require_superuser
 from src.models.models import Empresa
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import (
+    DecisaoDesassociacaoRequest,
     EmpresaCreate,
     EmpresaResponse,
     EmpresaUpdate,
     EstatisticaEmpresaItem,
     HistoricoCadastroResponse,
+    SolicitarDesassociacaoRequest,
 )
 from src.schemas.validacao import validar_motivo_recusa
 from src.services.auth_service import auth_service
@@ -114,6 +116,56 @@ def historico_da_empresa(
     para a mais antiga, com autor e data/hora (HU006).
     """
     return empresa_service.listar_historico(db, usuario["empresa_id"])
+
+
+@router.post("/me/solicitar-desassociacao", response_model=EmpresaResponse)
+@router.delete("/me", response_model=EmpresaResponse, include_in_schema=False)
+def solicitar_desassociacao_da_empresa(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+    dados: Annotated[SolicitarDesassociacaoRequest | None, Body()] = None,
+):
+    """
+    Permite que a empresa autenticada solicite sua exclusão/desassociação do
+    sistema mediante validação com a prefeitura (RF#004).
+    """
+    return empresa_service.solicitar_desassociacao(
+        db=db,
+        empresa=empresa_do_usuario(db, usuario),
+        dados=dados or SolicitarDesassociacaoRequest(),
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
+
+
+@router.delete("/me/solicitar-desassociacao", response_model=EmpresaResponse)
+def cancelar_solicitacao_desassociacao_da_empresa(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Permite que a empresa cancele uma solicitação de desassociação pendente.
+    """
+    return empresa_service.cancelar_solicitacao_desassociacao(
+        db=db,
+        empresa=empresa_do_usuario(db, usuario),
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
+
+
+@router.get("/solicitacoes-desassociacao", response_model=list[EmpresaResponse])
+def listar_solicitacoes_desassociacao(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+):
+    """
+    Lista as empresas do município que solicitaram desassociação e aguardam
+    decisão do gestor da prefeitura (RF#004).
+    """
+    return empresa_service.listar_solicitacoes_desassociacao(
+        db=db, prefeitura_id=usuario["prefeitura_id"]
+    )
 
 
 @router.get("/estatisticas/ranking", response_model=list[EstatisticaEmpresaItem])
@@ -275,3 +327,23 @@ def validar_vinculo_empresa(
     db.refresh(empresa)
 
     return empresa
+
+
+@router.patch("/{empresa_id}/desassociacao", response_model=EmpresaResponse)
+def validar_desassociacao_empresa(
+    empresa_id: str,
+    dados: DecisaoDesassociacaoRequest,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+):
+    """
+    Endpoint para o Gestor da prefeitura aprovar ou recusar a solicitação de
+    exclusão/desassociação de uma empresa do seu município (RF#004).
+    """
+    return empresa_service.decidir_desassociacao(
+        db=db,
+        empresa=empresa_do_municipio(db, empresa_id, usuario),
+        dados=dados,
+        gestor_id=usuario["id"],
+        gestor_nome=usuario["nome"],
+    )

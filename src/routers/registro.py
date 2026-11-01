@@ -19,11 +19,13 @@ from src.schemas.schemas import (
     EstatisticaMaterialItem,
     EstatisticaPeriodoItem,
     EvolucaoTemporalResponse,
+    HistoricoRegistroResponse,
     RegistroAcompanhamentoResponse,
     RegistroCreate,
     RegistroGestorCreate,
     RegistroRejeicaoRequest,
     RegistroResponse,
+    RegistroUpdate,
     RegistroValidacaoRequest,
     RegistroValidacaoUpdate,
     ResumoRegistrosResponse,
@@ -475,6 +477,32 @@ def estatisticas_registros_por_empresa(
     )
 
 
+@router.get(
+    "/alteracoes",
+    response_model=list[HistoricoRegistroResponse],
+    summary="Histórico de edições e exclusões de lançamentos",
+)
+def listar_alteracoes_registros(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+    registro_id: str | None = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+):
+    """
+    Lista as edições e exclusões de lançamentos, da mais recente para a mais
+    antiga, com autor e data/hora (HU012). A empresa vê as próprias
+    alterações e a prefeitura, as das empresas do seu município.
+    """
+    return registro_service.listar_alteracoes(
+        db=db,
+        usuario=usuario,
+        registro_id=registro_id,
+        skip=skip,
+        limit=limit,
+    )
+
+
 @router.get("/", response_model=list[RegistroResponse])
 def listar_registros(
     response: Response,
@@ -547,6 +575,49 @@ def obter_registro(
             detail="Registro não encontrado.",
         )
     return registro
+
+
+@router.patch("/{registro_id}", response_model=RegistroResponse)
+def editar_registro(
+    registro_id: str,
+    dados: RegistroUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Corrige um lançamento da empresa que ainda não foi validado (HU012).
+    Só lançamentos pendentes ou rejeitados podem ser editados, e um lançamento
+    rejeitado volta para a fila de validação depois da correção. Cada campo
+    alterado fica no histórico com autor e data/hora.
+    """
+    return registro_service.editar_registro(
+        db=db,
+        registro_id=registro_id,
+        empresa_id=usuario["empresa_id"],
+        dados=dados,
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
+
+
+@router.delete("/{registro_id}", status_code=status.HTTP_204_NO_CONTENT)
+def excluir_registro(
+    registro_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_empresa)],
+):
+    """
+    Exclui um lançamento da empresa que ainda não foi validado (HU012).
+    A exclusão fica registrada no histórico com autor e data/hora.
+    """
+    registro_service.excluir_registro(
+        db=db,
+        registro_id=registro_id,
+        empresa_id=usuario["empresa_id"],
+        autor_id=usuario["id"],
+        autor_nome=usuario["nome"],
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/{registro_id}/validar", response_model=RegistroResponse)

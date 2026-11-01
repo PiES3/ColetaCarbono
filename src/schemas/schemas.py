@@ -10,6 +10,7 @@ from pydantic import (
 )
 
 from src.schemas.enums import (
+    AcaoHistoricoRegistro,
     AgrupamentoRelatorio,
     Perfil,
     StatusValidacao,
@@ -292,6 +293,28 @@ class RegistroGestorCreate(RegistroCreate):
         return validar_periodo(valor, permitir_futuro=True)
 
 
+class RegistroUpdate(BaseModel):
+    material_id: str | None = None
+    periodo: str | None = None
+    volume_total: float | None = None
+    percentual_reciclado: float | None = None
+
+    @field_validator("periodo")
+    @classmethod
+    def checar_periodo(cls, valor: str | None) -> str | None:
+        return None if valor is None else validar_periodo(valor)
+
+    @field_validator("volume_total")
+    @classmethod
+    def checar_volume(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_volume(valor)
+
+    @field_validator("percentual_reciclado")
+    @classmethod
+    def checar_percentual(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_percentual(valor)
+
+
 class RegistroValidacaoRequest(BaseModel):
     validador_id: str | None = None
     volume_validado: float | None = None
@@ -358,6 +381,21 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
 
 class RegistroAcompanhamentoResponse(RegistroResponse):
     pass
+
+
+class HistoricoRegistroResponse(BaseModel):
+    id: str
+    registro_id: str
+    empresa_id: str
+    acao: AcaoHistoricoRegistro
+    campo: str | None = None
+    valor_anterior: str | None = None
+    valor_novo: str | None = None
+    autor_id: str
+    autor_nome: str
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EmpresaComUsuariosResponse(EmpresaResponse):

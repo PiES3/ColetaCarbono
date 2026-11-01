@@ -110,6 +110,22 @@ CREATE TABLE IF NOT EXISTS historico_cadastro (
     FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS historico_registros (
+    id TEXT PRIMARY KEY,
+    registro_id TEXT NOT NULL,
+    empresa_id TEXT NOT NULL,
+    autor_id TEXT NOT NULL,
+    autor_nome TEXT NOT NULL,
+    acao TEXT NOT NULL CHECK(acao IN ('EDICAO', 'EXCLUSAO')),
+    campo TEXT,
+    valor_anterior TEXT,
+    valor_novo TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME,
+    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS ix_empresas_prefeitura_id
     ON empresas (prefeitura_id);
 
@@ -121,6 +137,12 @@ CREATE INDEX IF NOT EXISTS ix_registros_created_at
 
 CREATE INDEX IF NOT EXISTS ix_historico_cadastro_empresa_id
     ON historico_cadastro (empresa_id);
+
+CREATE INDEX IF NOT EXISTS ix_historico_registros_registro_id
+    ON historico_registros (registro_id);
+
+CREATE INDEX IF NOT EXISTS ix_historico_registros_empresa_id
+    ON historico_registros (empresa_id);
 
 CREATE TABLE IF NOT EXISTS tokens_redefinicao_senha (
     id TEXT PRIMARY KEY,

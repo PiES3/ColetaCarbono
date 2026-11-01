@@ -25,3 +25,8 @@ class AgrupamentoRelatorio(StrEnum):
     SEMANAL = "semanal"
     MENSAL = "mensal"
     ANUAL = "anual"
+
+
+class AcaoHistoricoRegistro(StrEnum):
+    EDICAO = "EDICAO"
+    EXCLUSAO = "EXCLUSAO"

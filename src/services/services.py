@@ -2,18 +2,23 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import requests
 from fastapi import HTTPException, status
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from src.models.models import Empresa, Material, Registro
-from src.schemas.enums import StatusValidacao, StatusVinculo
+from src.core.security import require_empresa
+from src.models.models import Empresa, HistoricoRegistro, Material, Registro
+from src.schemas.enums import AcaoHistoricoRegistro, StatusValidacao, StatusVinculo
 
 if TYPE_CHECKING:
-    from src.schemas.schemas import RegistroCreate, SincronizacaoLoteResponse
+    from src.schemas.schemas import (
+        RegistroCreate,
+        RegistroUpdate,
+        SincronizacaoLoteResponse,
+    )
 
 VALOR_TONELADA_CO2_USD = 5.0
 COTACAO_DOLAR_FALLBACK = 5.30
@@ -60,6 +65,19 @@ def obter_cotacao_dolar(fallback: float = COTACAO_DOLAR_FALLBACK) -> float:
 
         _cache_cotacao.update(valor=valor, obtida_em=agora)
         return valor
+
+
+def _numero(valor: float) -> str:
+    return format(valor, "g")
+
+
+def _resumo_registro(registro: Registro) -> str:
+    categoria = registro.material.categoria if registro.material else None
+    return (
+        f"{categoria or registro.material_id} · {registro.periodo} · "
+        f"{_numero(registro.volume_total_original)} t · "
+        f"{_numero(registro.percentual_reciclado)} %"
+    )
 
 
 class RegistroService:
@@ -257,6 +275,194 @@ class RegistroService:
         db.refresh(novo_registro)
 
         return novo_registro
+
+    def _registro_alteravel(
+        self, db: Session, registro_id: str, empresa_id: str
+    ) -> Registro:
+        registro = (
+            db.query(Registro)
+            .filter(Registro.id == registro_id, Registro.empresa_id == empresa_id)
+            .first()
+        )
+        if not registro:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Registro não encontrado.",
+            )
+        if registro.status_validacao == StatusValidacao.VALIDADO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Lançamentos validados não podem ser editados nem excluídos.",
+            )
+        return registro
+
+    def _registrar_alteracao(
+        self,
+        db: Session,
+        registro: Registro,
+        acao: AcaoHistoricoRegistro,
+        autor_id: str,
+        autor_nome: str,
+        campo: str,
+        anterior: str | None,
+        novo: str | None,
+    ) -> None:
+        db.add(
+            HistoricoRegistro(
+                registro_id=registro.id,
+                empresa_id=registro.empresa_id,
+                autor_id=autor_id,
+                autor_nome=autor_nome,
+                acao=acao,
+                campo=campo,
+                valor_anterior=anterior,
+                valor_novo=novo,
+            )
+        )
+
+    def editar_registro(
+        self,
+        db: Session,
+        registro_id: str,
+        empresa_id: str,
+        dados: RegistroUpdate,
+        autor_id: str,
+        autor_nome: str,
+    ) -> Registro:
+        """
+        Corrige um lançamento pendente ou rejeitado da empresa (HU012).
+        Cada campo alterado fica no histórico com autor e data/hora, e um
+        lançamento rejeitado volta para a fila de validação.
+        """
+        registro = self._registro_alteravel(db, registro_id, empresa_id)
+        alteracoes = dados.model_dump(exclude_none=True)
+        mudancas: list[tuple[str, str | None, str | None]] = []
+
+        novo_material_id = alteracoes.get("material_id")
+        if novo_material_id and novo_material_id != registro.material_id:
+            material = db.get(Material, novo_material_id)
+            if not material:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Material inválido.",
+                )
+            anterior = registro.material.categoria if registro.material else None
+            mudancas.append(
+                ("material", anterior or registro.material_id, material.categoria)
+            )
+            registro.material_id = material.id
+
+        novo_periodo = alteracoes.get("periodo")
+        if novo_periodo and novo_periodo != registro.periodo:
+            mudancas.append(("periodo", registro.periodo, novo_periodo))
+            registro.periodo = novo_periodo
+
+        novo_volume = alteracoes.get("volume_total")
+        if novo_volume is not None and novo_volume != registro.volume_total_original:
+            mudancas.append(
+                (
+                    "volume_total",
+                    _numero(registro.volume_total_original),
+                    _numero(novo_volume),
+                )
+            )
+            registro.volume_total_original = novo_volume
+
+        novo_percentual = alteracoes.get("percentual_reciclado")
+        if (
+            novo_percentual is not None
+            and novo_percentual != registro.percentual_reciclado
+        ):
+            mudancas.append(
+                (
+                    "percentual_reciclado",
+                    _numero(registro.percentual_reciclado),
+                    _numero(novo_percentual),
+                )
+            )
+            registro.percentual_reciclado = novo_percentual
+
+        if mudancas and registro.status_validacao != StatusValidacao.PENDENTE:
+            mudancas.append(
+                (
+                    "status_validacao",
+                    StatusValidacao.REJEITADO.value,
+                    StatusValidacao.PENDENTE.value,
+                )
+            )
+            registro.status_validacao = StatusValidacao.PENDENTE
+            registro.motivo_rejeicao = None
+            registro.validador_id = None
+            registro.data_validacao = None
+
+        for campo, anterior, novo in mudancas:
+            self._registrar_alteracao(
+                db=db,
+                registro=registro,
+                acao=AcaoHistoricoRegistro.EDICAO,
+                autor_id=autor_id,
+                autor_nome=autor_nome,
+                campo=campo,
+                anterior=anterior,
+                novo=novo,
+            )
+
+        db.commit()
+        db.refresh(registro)
+        return registro
+
+    def excluir_registro(
+        self,
+        db: Session,
+        registro_id: str,
+        empresa_id: str,
+        autor_id: str,
+        autor_nome: str,
+    ) -> None:
+        """
+        Exclui um lançamento pendente ou rejeitado da empresa (HU012).
+        O histórico guarda um resumo do lançamento, o autor e a data/hora.
+        """
+        registro = self._registro_alteravel(db, registro_id, empresa_id)
+        self._registrar_alteracao(
+            db=db,
+            registro=registro,
+            acao=AcaoHistoricoRegistro.EXCLUSAO,
+            autor_id=autor_id,
+            autor_nome=autor_nome,
+            campo="registro",
+            anterior=_resumo_registro(registro),
+            novo=None,
+        )
+        db.delete(registro)
+        db.commit()
+
+    def listar_alteracoes(
+        self,
+        db: Session,
+        usuario: dict[str, Any],
+        registro_id: str | None = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[HistoricoRegistro]:
+        query = db.query(HistoricoRegistro)
+        if usuario["user_type"] == "PREFEITURA":
+            query = query.join(
+                Empresa, HistoricoRegistro.empresa_id == Empresa.id
+            ).filter(Empresa.prefeitura_id == usuario["prefeitura_id"])
+        else:
+            require_empresa(usuario)
+            query = query.filter(HistoricoRegistro.empresa_id == usuario["empresa_id"])
+
+        if registro_id:
+            query = query.filter(HistoricoRegistro.registro_id == registro_id)
+
+        return (
+            query.order_by(HistoricoRegistro.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
 
     def sincronizar_lote(
         self,

@@ -8,7 +8,12 @@ from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.base import Base, TimestampMixin, gen_uuid
-from src.schemas.enums import Perfil, StatusValidacao, StatusVinculo
+from src.schemas.enums import (
+    AcaoHistoricoRegistro,
+    Perfil,
+    StatusValidacao,
+    StatusVinculo,
+)
 
 CORES_CONAMA_275: tuple[tuple[tuple[str, ...], str], ...] = (
     (("papel", "papelao", "celulose"), "#0057B8"),  # Azul
@@ -218,6 +223,22 @@ class Registro(Base, TimestampMixin):
     @property
     def validador_nome(self) -> str | None:
         return self.nome_validador
+
+
+class HistoricoRegistro(Base, TimestampMixin):
+    __tablename__ = "historico_registros"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    registro_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), index=True)
+    autor_id: Mapped[str] = mapped_column(String, nullable=False)
+    autor_nome: Mapped[str] = mapped_column(String, nullable=False)
+    acao: Mapped[AcaoHistoricoRegistro] = mapped_column(
+        SQLEnum(AcaoHistoricoRegistro), nullable=False
+    )
+    campo: Mapped[str | None] = mapped_column(String, nullable=True)
+    valor_anterior: Mapped[str | None] = mapped_column(String, nullable=True)
+    valor_novo: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class UsuarioAdmin(Base, TimestampMixin):

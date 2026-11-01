@@ -233,6 +233,19 @@ class RegistroService:
                 ),
             )
 
+        client_id = (dados.client_id or "").strip() or None
+        if client_id:
+            existente = (
+                db.query(Registro)
+                .filter(
+                    Registro.empresa_id == empresa.id,
+                    Registro.client_id == client_id,
+                )
+                .first()
+            )
+            if existente:
+                return existente
+
         material = db.query(Material).filter(Material.id == dados.material_id).first()
         if not material:
             raise HTTPException(
@@ -258,6 +271,7 @@ class RegistroService:
         novo_registro = Registro(
             empresa_id=dados.empresa_id,
             material_id=dados.material_id,
+            client_id=client_id,
             periodo=dados.periodo,
             volume_total_original=dados.volume_total,
             percentual_reciclado=dados.percentual_reciclado,

@@ -189,3 +189,38 @@ def test_serie_temporal_ignora_rejeitados(client: TestClient):
         headers=gestor,
     )
     assert totais() == antes
+
+
+def test_reenvio_de_lancamento_offline_nao_duplica(client: TestClient):
+    """
+    O mesmo lançamento salvo sem conexão pode ser reenviado pela empresa ou
+    pela prefeitura: o servidor devolve o registro que já existe.
+    """
+    empresa = _headers(client, "empresa@demo.com")
+    gestor = _headers(client, "gestor@demo.com")
+
+    primeiro = _lancar(client, empresa, material_id="metal", client_id="offline-1")
+    segundo = _lancar(client, empresa, material_id="metal", client_id="offline-1")
+    assert primeiro["id"] == segundo["id"]
+
+    corpo = {
+        "empresa_id": "empresa-demo",
+        "material_id": "metal",
+        "periodo": "2026-08",
+        "volume_total": 4.0,
+        "percentual_reciclado": 60.0,
+        "client_id": "gestor-offline-1",
+    }
+    respostas = [
+        client.post("/registros/gestor", json=corpo, headers=gestor) for _ in range(2)
+    ]
+    assert [r.status_code for r in respostas] == [201, 201]
+    assert respostas[0].json()["id"] == respostas[1].json()["id"]
+    assert respostas[0].json()["client_id"] == "gestor-offline-1"
+
+    metais = client.get(
+        "/registros/",
+        params={"material_id": "metal", "periodo": "2026-08"},
+        headers=gestor,
+    )
+    assert metais.headers["x-total-count"] == "2"

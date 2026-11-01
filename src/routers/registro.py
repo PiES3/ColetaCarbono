@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Query as ConsultaSQL
 from sqlalchemy.orm import Session, joinedload
 
@@ -95,6 +95,8 @@ def registros_visiveis(db: Session, usuario: dict[str, Any]) -> ConsultaSQL:
     base = db.query(Registro).options(
         joinedload(Registro.criador_gestor),
         joinedload(Registro.validador),
+        joinedload(Registro.empresa),
+        joinedload(Registro.material),
     )
     if usuario["user_type"] == "PREFEITURA":
         return base.join(Registro.empresa).filter(
@@ -475,9 +477,11 @@ def estatisticas_registros_por_empresa(
 
 @router.get("/", response_model=list[RegistroResponse])
 def listar_registros(
+    response: Response,
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
+    material_id: str | None = None,
     status_param: Annotated[str | None, Query(alias="status")] = None,
     status_validacao: StatusValidacao | None = None,
     periodo: str | None = None,
@@ -486,18 +490,23 @@ def listar_registros(
     data_inicio: str | None = None,
     data_fim: str | None = None,
     apenas_prefeitura: bool | None = None,
+    ordem: Literal["desc", "asc"] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ):
     """
-    Lista os registros, do mais recente para o mais antigo.
+    Lista os registros pela data do lançamento, do mais recente para o mais
+    antigo (`ordem=desc`) ou o contrário (`ordem=asc`).
     A empresa vê apenas os próprios registros; a prefeitura vê os das empresas
-    do seu município. Pode ser filtrado por empresa_id, status, período e
-    origem (`apenas_prefeitura`).
+    do seu município. Pode ser filtrado por empresa_id, material_id, status,
+    período e origem (`apenas_prefeitura`). O total de registros encontrados,
+    sem a paginação, vai no cabeçalho `X-Total-Count`.
     """
     query = registros_visiveis(db, usuario)
     if empresa_id:
         query = query.filter(Registro.empresa_id == empresa_id)
+    if material_id:
+        query = query.filter(Registro.material_id == material_id)
 
     status_filtro = _normalizar_status(status_param, status_validacao)
     if status_filtro:
@@ -512,7 +521,11 @@ def listar_registros(
     elif apenas_prefeitura is False:
         query = query.filter(Registro.criado_por_gestor_id.is_(None))
 
-    return query.order_by(Registro.created_at.desc()).offset(skip).limit(limit).all()
+    response.headers["X-Total-Count"] = str(query.count())
+    ordenacao = (
+        Registro.created_at.asc() if ordem == "asc" else Registro.created_at.desc()
+    )
+    return query.order_by(ordenacao).offset(skip).limit(limit).all()
 
 
 @router.get("/{registro_id}", response_model=RegistroResponse)

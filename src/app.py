@@ -138,6 +138,7 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count", "Content-Disposition"],
 )
 
 app.include_router(health.router)

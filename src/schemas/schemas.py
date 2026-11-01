@@ -332,6 +332,7 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     )
     id: str
     empresa_id: str
+    empresa_nome: str | None = None
     material_id: str
     material_categoria: str | None = None
     client_id: str | None = None

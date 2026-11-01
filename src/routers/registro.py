@@ -88,19 +88,6 @@ def _aplicar_filtros_periodo(
     return query
 
 
-def _exigir_prefeitura_se_autenticado(
-    current_user: dict[str, Any] | None,
-) -> None:
-    if current_user and (
-        not current_user.get("is_superuser")
-        or current_user.get("user_type") != "PREFEITURA"
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso restrito à Prefeitura (Superusuário).",
-        )
-
-
 def registros_visiveis(db: Session, usuario: dict[str, Any]) -> ConsultaSQL:
     base = db.query(Registro).options(
         joinedload(Registro.criador_gestor),
@@ -207,9 +194,7 @@ def criar_registro(
 )
 def acompanhar_registros_empresa(
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[
-        dict[str, Any] | None, Depends(get_current_user_optional)
-    ] = None,
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
     status_param: Annotated[str | None, Query(alias="status")] = None,
     status_validacao: StatusValidacao | None = None,
@@ -226,40 +211,20 @@ def acompanhar_registros_empresa(
     Endpoint para a empresa acompanhar a situação de cada registro que ela lançou.
     Exibe se foi validado, pendente ou rejeitado, o motivo da rejeição ou a
     data/hora e o responsável pela validação. Pode ser filtrado por status e
-    período.
+    período. A prefeitura consulta uma empresa do próprio município informando
+    `empresa_id`.
     """
-    empresa_alvo_id = empresa_id
-    if current_user:
-        if current_user.get("user_type") == "EMPRESA":
-            empresa_alvo_id = current_user["id"]
-        elif current_user.get("user_type") == "USUARIO_EMPRESA":
-            empresa_alvo_id = current_user.get("empresa_id")
-
-    if not empresa_alvo_id:
-        if current_user and current_user.get("user_type") == "PREFEITURA":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "É necessário informar 'empresa_id' para consultar o "
-                    "acompanhamento."
-                ),
-            )
+    if current_user["user_type"] == "PREFEITURA" and not empresa_id:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Autenticação necessária para consultar o acompanhamento dos "
-                "registros da empresa."
+                "É necessário informar 'empresa_id' para consultar o acompanhamento."
             ),
         )
 
-    query = (
-        db.query(Registro)
-        .options(
-            joinedload(Registro.criador_gestor),
-            joinedload(Registro.validador),
-        )
-        .filter(Registro.empresa_id == empresa_alvo_id)
-    )
+    query = registros_visiveis(db, current_user)
+    if current_user["user_type"] == "PREFEITURA":
+        query = query.filter(Registro.empresa_id == empresa_id)
 
     status_filtro = _normalizar_status(status_param, status_validacao)
     if status_filtro:
@@ -286,6 +251,8 @@ def estatisticas_resumo_registros(
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
     material_id: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
 ):
     """
     Retorna os indicadores gerais (totais de registros, volumes declarados e
@@ -300,6 +267,8 @@ def estatisticas_resumo_registros(
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
         material_id=material_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
     )
 
 
@@ -312,6 +281,8 @@ def estatisticas_registros_por_status(
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
     material_id: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
 ) -> dict[str, int]:
     """
     Retorna a contagem de registros agrupados por status de validação
@@ -325,6 +296,8 @@ def estatisticas_registros_por_status(
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
         material_id=material_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
     )
 
 
@@ -344,6 +317,8 @@ def estatisticas_registros_por_material(
     periodo: str | None = None,
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
 ):
     """
     Retorna o detalhamento de registros, volumes, carbono evitado e valor
@@ -356,6 +331,8 @@ def estatisticas_registros_por_material(
         periodo=periodo,
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
     )
 
 
@@ -375,6 +352,8 @@ def estatisticas_registros_por_periodo(
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
     material_id: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
 ):
     """
     Retorna a evolução temporal (por período AAAA-MM) de registros, volumes,
@@ -387,6 +366,8 @@ def estatisticas_registros_por_periodo(
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
         material_id=material_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
     )
 
 
@@ -401,6 +382,8 @@ def estatisticas_registros_por_empresa(
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
     material_id: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
 ):
     """
@@ -414,6 +397,8 @@ def estatisticas_registros_por_empresa(
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
         material_id=material_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
         limit=limit,
     )
 
@@ -464,18 +449,14 @@ def listar_registros(
 def obter_registro(
     registro_id: str,
     db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
 ):
     """
     Obtém os detalhes de um registro específico pelo seu ID.
+    A empresa só vê os próprios registros e a prefeitura, os do seu município.
     """
     registro = (
-        db.query(Registro)
-        .options(
-            joinedload(Registro.criador_gestor),
-            joinedload(Registro.validador),
-        )
-        .filter(Registro.id == registro_id)
-        .first()
+        registros_visiveis(db, usuario).filter(Registro.id == registro_id).first()
     )
     if not registro:
         raise HTTPException(
@@ -490,24 +471,20 @@ def validar_registro(
     registro_id: str,
     dados_validacao: ValidacaoRequest,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[
-        dict[str, Any] | None, Depends(get_current_user_optional)
-    ] = None,
+    current_user: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
     Endpoint utilizado pelo Gestor de Resíduos da Prefeitura para validar a pesagem.
-    Só valida registros de empresas do próprio município.
-    Executa o cálculo do carbono evitado e a estimativa financeira via RegistroService.
+    Só valida registros de empresas do próprio município. O gestor pode corrigir
+    a tonelagem: o volume declarado continua guardado ao lado do validado.
+    O carbono evitado e a estimativa financeira são sempre calculados pelo sistema.
     """
-    _exigir_prefeitura_se_autenticado(current_user)
-    validador_id = current_user["id"] if current_user else dados_validacao.validador_id
-
     return registro_service.validar_e_calcular(
         db=db,
         registro_id=registro_id,
-        validador_id=validador_id,
+        validador_id=current_user["id"],
         volume_validado=dados_validacao.volume_validado,
-        prefeitura_id=current_user.get("prefeitura_id") if current_user else None,
+        prefeitura_id=current_user["prefeitura_id"],
     )
 
 
@@ -521,23 +498,18 @@ def rejeitar_registro(
     registro_id: str,
     dados_rejeicao: RejeicaoRequest,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[
-        dict[str, Any] | None, Depends(get_current_user_optional)
-    ] = None,
+    current_user: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
     Endpoint utilizado pelo Gestor de Resíduos da Prefeitura para rejeitar um registro.
     O fornecimento de um motivo para a rejeição é obrigatório.
     """
-    _exigir_prefeitura_se_autenticado(current_user)
-    validador_id = current_user["id"] if current_user else dados_rejeicao.validador_id
-
     return registro_service.rejeitar_registro(
         db=db,
         registro_id=registro_id,
         motivo_rejeicao=dados_rejeicao.motivo_rejeicao,
-        validador_id=validador_id,
-        prefeitura_id=current_user.get("prefeitura_id") if current_user else None,
+        validador_id=current_user["id"],
+        prefeitura_id=current_user["prefeitura_id"],
     )
 
 
@@ -546,17 +518,14 @@ def atualizar_status_registro(
     registro_id: str,
     dados: RegistroValidacaoUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[
-        dict[str, Any] | None, Depends(get_current_user_optional)
-    ] = None,
+    current_user: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
     Atualiza o status de validação do registro (VALIDADO ou REJEITADO).
     Se for rejeitado, o motivo é obrigatório.
     """
-    _exigir_prefeitura_se_autenticado(current_user)
-    validador_id = current_user["id"] if current_user else dados.validador_id
-    prefeitura_id = current_user.get("prefeitura_id") if current_user else None
+    validador_id = current_user["id"]
+    prefeitura_id = current_user["prefeitura_id"]
 
     if dados.status_validacao == StatusValidacao.VALIDADO:
         return registro_service.validar_e_calcular(

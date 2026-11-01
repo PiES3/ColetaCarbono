@@ -428,13 +428,30 @@ def test_obter_registro_detalhado_por_id(client: TestClient):
     )
     registro_id = criacao.json()["id"]
 
-    response = client.get(f"/registros/{registro_id}")
+    assert client.get(f"/registros/{registro_id}").status_code == 401
+
+    response = client.get(
+        f"/registros/{registro_id}",
+        headers={"Authorization": f"Bearer {_obter_token_empresa(client)}"},
+    )
     assert response.status_code == 200
     dados = response.json()
     assert dados["id"] == registro_id
+    assert dados["material_categoria"] == "Metal"
     assert dados["inserido_pela_prefeitura"] is True
     assert dados["origem"] == "PREFEITURA"
     assert dados["nome_gestor"] == "Gestor Demo"
+
+    login_outra_cidade = client.post(
+        "/auth/login",
+        json={"email": "gestor2@demo.com", "senha": "demo123"},
+    )
+    token_outra_cidade = login_outra_cidade.json()["access_token"]
+    response = client.get(
+        f"/registros/{registro_id}",
+        headers={"Authorization": f"Bearer {token_outra_cidade}"},
+    )
+    assert response.status_code == 404
 
 
 # ============================================================================
@@ -551,7 +568,10 @@ def test_gestor_rejeita_registro_com_motivo_sucesso(client: TestClient):
     assert dados["valorestimado"] is None
 
     # Consulta individual para confirmar a persistência
-    resp_get = client.get(f"/registros/{registro_id}")
+    resp_get = client.get(
+        f"/registros/{registro_id}",
+        headers={"Authorization": f"Bearer {token_gestor}"},
+    )
     assert resp_get.status_code == 200
     assert resp_get.json()["status_validacao"] == "REJEITADO"
     assert resp_get.json()["motivo_rejeicao"] == motivo
@@ -1047,6 +1067,173 @@ def test_empresa_acompanhamento_aliases_e_seguranca(client: TestClient):
     # Sem autenticação e sem empresa_id -> 401
     resp_unauth = client.get("/registros/acompanhamento")
     assert resp_unauth.status_code == 401
+
+
+def test_acompanhamento_restrito_ao_municipio(client: TestClient):
+    """
+    Sem login, informar o empresa_id não basta para ver os registros, e a
+    prefeitura só acompanha empresas do próprio município.
+    """
+    resp_anonimo = client.get("/registros/acompanhamento?empresa_id=empresa-demo")
+    assert resp_anonimo.status_code == 401
+
+    token_gestor = _obter_token_gestor(client)
+    headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
+
+    resp_sem_empresa = client.get("/registros/acompanhamento", headers=headers_gestor)
+    assert resp_sem_empresa.status_code == 400
+
+    resp_propria = client.get(
+        "/registros/acompanhamento?empresa_id=empresa-demo", headers=headers_gestor
+    )
+    assert resp_propria.status_code == 200
+    assert all(r["empresa_id"] == "empresa-demo" for r in resp_propria.json())
+
+    resp_outra = client.get(
+        "/registros/acompanhamento?empresa_id=empresa-quixeramobim",
+        headers=headers_gestor,
+    )
+    assert resp_outra.status_code == 200
+    assert resp_outra.json() == []
+
+
+def test_validacao_exige_login_da_prefeitura(client: TestClient):
+    """
+    Só o gestor autenticado valida ou rejeita. Sem login, nem informando o
+    validador_id no corpo, a tonelagem é conferida.
+    """
+    resp_criacao = client.post(
+        "/registros/",
+        json={
+            "empresa_id": "empresa-demo",
+            "material_id": "papel",
+            "periodo": "2026-10",
+            "volume_total": 10.0,
+            "percentual_reciclado": 50.0,
+        },
+    )
+    registro_id = resp_criacao.json()["id"]
+
+    corpo_validacao = {"volume_validado": 10.0, "validador_id": "gestor-demo"}
+    assert (
+        client.patch(f"/registros/{registro_id}/validar", json=corpo_validacao)
+    ).status_code == 401
+    assert (
+        client.patch(
+            f"/registros/{registro_id}/rejeitar",
+            json={"motivo_rejeicao": "Sem conferência", "validador_id": "gestor-demo"},
+        )
+    ).status_code == 401
+    assert (
+        client.patch(
+            f"/registros/{registro_id}/status",
+            json={"status_validacao": "VALIDADO", "validador_id": "gestor-demo"},
+        )
+    ).status_code == 401
+
+    token_empresa = _obter_token_empresa(client)
+    resp = client.get(
+        f"/registros/{registro_id}",
+        headers={"Authorization": f"Bearer {token_empresa}"},
+    )
+    assert resp.json()["status_validacao"] == "PENDENTE"
+
+
+def test_rejeitados_ficam_fora_dos_totais(client: TestClient, monkeypatch):
+    """
+    Lançamentos rejeitados não entram em nenhuma soma: nem no volume
+    declarado, nem no percentual médio, nem no carbono evitado.
+    """
+    monkeypatch.setattr(
+        "src.services.services.obter_cotacao_dolar", lambda *_args, **_kw: 5.0
+    )
+    token_gestor = _obter_token_gestor(client)
+    headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
+    filtro = "?periodo=2025-01"
+
+    def resumo() -> dict:
+        resposta = client.get(
+            f"/registros/estatisticas/resumo{filtro}", headers=headers_gestor
+        )
+        assert resposta.status_code == 200
+        return resposta.json()
+
+    def lancar(volume: float, percentual: float) -> str:
+        resposta = client.post(
+            "/registros/",
+            json={
+                "empresa_id": "empresa-demo",
+                "material_id": "papel",
+                "periodo": "2025-01",
+                "volume_total": volume,
+                "percentual_reciclado": percentual,
+            },
+        )
+        assert resposta.status_code == 201
+        return resposta.json()["id"]
+
+    validado = lancar(10.0, 50.0)
+    client.patch(
+        f"/registros/{validado}/validar",
+        json={"volume_validado": 8.0},
+        headers=headers_gestor,
+    )
+    rejeitado = lancar(1000.0, 100.0)
+    client.patch(
+        f"/registros/{rejeitado}/rejeitar",
+        json={"motivo_rejeicao": "Volume fora da realidade"},
+        headers=headers_gestor,
+    )
+
+    dados = resumo()
+    assert dados["registros_validados"] == 1
+    assert dados["registros_rejeitados"] == 1
+    assert dados["volume_total_declarado"] == 10.0
+    assert dados["volume_total_validado"] == 8.0
+    assert dados["percentual_medio_reciclado"] == 50.0
+    assert dados["carbono_total_evitado"] == 4.0
+
+    por_material = client.get(
+        f"/registros/estatisticas/por-material{filtro}", headers=headers_gestor
+    ).json()
+    assert [m["volume_declarado"] for m in por_material] == [10.0]
+
+    detalhe = client.get(f"/registros/{validado}", headers=headers_gestor).json()
+    assert detalhe["volume_total"] == 10.0
+    assert detalhe["volume_validado"] == 8.0
+    assert detalhe["nome_validador"] == "Gestor Demo"
+    assert detalhe["data_validacao"] is not None
+
+
+def test_dashboard_filtra_pela_data_do_lancamento(client: TestClient):
+    """
+    O filtro de semana usa a data do lançamento: data_inicio no futuro
+    não traz nada, e data_inicio no passado traz os lançamentos.
+    """
+    token_empresa = _obter_token_empresa(client)
+    headers_empresa = {"Authorization": f"Bearer {token_empresa}"}
+
+    client.post(
+        "/registros/",
+        json={
+            "material_id": "vidro",
+            "periodo": "2026-01",
+            "volume_total": 3.0,
+            "percentual_reciclado": 20.0,
+        },
+        headers=headers_empresa,
+    )
+
+    passado = client.get(
+        "/dashboard/?data_inicio=2000-01-01T00:00:00", headers=headers_empresa
+    ).json()
+    assert passado["resumo_registros"]["registros_pendentes"] >= 1
+
+    futuro = client.get(
+        "/dashboard/?data_inicio=2999-01-01T00:00:00", headers=headers_empresa
+    ).json()
+    assert futuro["resumo_registros"]["total_registros"] == 0
+    assert futuro["por_material"] == []
 
 
 # ============================================================================

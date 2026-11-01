@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -21,6 +22,8 @@ def obter_resumo_dashboard(
     periodo_inicio: str | None = None,
     periodo_fim: str | None = None,
     material_id: str | None = None,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
 ):
     """
     Retorna todos os indicadores consolidados para o dashboard:
@@ -29,6 +32,11 @@ def obter_resumo_dashboard(
       ranking das empresas com maior impacto ambiental.
     - Para a Empresa: resumo dos próprios registros, detalhamento por material
       e evolução por período.
+
+    `periodo`, `periodo_inicio` e `periodo_fim` filtram pelo mês de referência
+    (AAAA-MM); `data_inicio` e `data_fim`, pela data do lançamento. Só
+    lançamentos validados entram nos totais oficiais, e os rejeitados ficam
+    de fora de todas as somas.
     """
     return estatisticas_service.dashboard_completo(
         db=db,
@@ -38,4 +46,6 @@ def obter_resumo_dashboard(
         periodo_inicio=periodo_inicio,
         periodo_fim=periodo_fim,
         material_id=material_id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
     )

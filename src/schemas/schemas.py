@@ -276,8 +276,11 @@ class RegistroValidacaoUpdate(BaseModel):
     )
     validador_id: str | None = None
     volume_validado: float | None = None
-    valorestimado: float | None = None
-    carbonoevitado: float | None = None
+
+    @field_validator("volume_validado")
+    @classmethod
+    def checar_volume(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_volume(valor)
 
 
 class RegistroResponse(RegistroBase, TimestampSchemaMixin):
@@ -287,6 +290,7 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     id: str
     empresa_id: str
     material_id: str
+    material_categoria: str | None = None
     validador_id: str | None = None
     criado_por_gestor_id: str | None = None
     inserido_pela_prefeitura: bool = False

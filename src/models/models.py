@@ -126,6 +126,10 @@ class Registro(Base, TimestampMixin):
     )
 
     @property
+    def material_categoria(self) -> str | None:
+        return self.material.categoria if self.material else None
+
+    @property
     def inserido_pela_prefeitura(self) -> bool:
         return self.criado_por_gestor_id is not None
 

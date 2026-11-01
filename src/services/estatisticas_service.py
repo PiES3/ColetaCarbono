@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func
@@ -23,9 +24,34 @@ STATUS_REGISTRO_PADRAO = (
 
 STATUS_EMPRESA_PADRAO = tuple(s.value for s in StatusVinculo)
 
+LIMITE_EMPRESAS_DASHBOARD = 100
+
 
 def _arredondar(valor: float | None, casas: int = 2) -> float:
     return round(float(valor or 0.0), casas)
+
+
+def _nao_rejeitado():
+    return Registro.status_validacao.notin_([StatusValidacao.REJEITADO, "RECUSADA"])
+
+
+def _volume_declarado():
+    return func.coalesce(
+        func.sum(case((_nao_rejeitado(), Registro.volume_total_original), else_=0.0)),
+        0.0,
+    )
+
+
+def _filtrar_datas(
+    query: ConsultaSQL,
+    data_inicio: datetime | None = None,
+    data_fim: datetime | None = None,
+) -> ConsultaSQL:
+    if data_inicio:
+        query = query.filter(Registro.created_at >= data_inicio)
+    if data_fim:
+        query = query.filter(Registro.created_at <= data_fim)
+    return query
 
 
 class EstatisticasService:
@@ -38,6 +64,8 @@ class EstatisticasService:
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
         material_id: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> ConsultaSQL:
         if usuario["user_type"] == "PREFEITURA":
             query = query.join(Empresa, Registro.empresa_id == Empresa.id).filter(
@@ -58,7 +86,7 @@ class EstatisticasService:
         if periodo_fim:
             query = query.filter(Registro.periodo <= periodo_fim)
 
-        return query
+        return _filtrar_datas(query, data_inicio, data_fim)
 
     def empresas_por_status(self, db: Session, prefeitura_id: str) -> dict[str, int]:
         contagens = dict.fromkeys(STATUS_EMPRESA_PADRAO, 0)
@@ -81,6 +109,8 @@ class EstatisticasService:
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
         material_id: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> dict[str, int]:
         contagens = dict.fromkeys(STATUS_REGISTRO_PADRAO, 0)
         query = self._filtrar_escopo_registros(
@@ -91,6 +121,8 @@ class EstatisticasService:
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
             material_id=material_id,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
         )
         for status_reg, total in query.group_by(Registro.status_validacao).all():
             chave = str(status_reg)
@@ -108,6 +140,8 @@ class EstatisticasService:
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
         material_id: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> ResumoRegistrosResponse:
         eh_validado = Registro.status_validacao == StatusValidacao.VALIDADO
         eh_pendente = Registro.status_validacao == StatusValidacao.PENDENTE
@@ -121,7 +155,7 @@ class EstatisticasService:
                 func.coalesce(func.sum(case((eh_pendente, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_validado, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_rejeitado, 1), else_=0)), 0),
-                func.coalesce(func.sum(Registro.volume_total_original), 0.0),
+                _volume_declarado(),
                 func.coalesce(
                     func.sum(case((eh_validado, Registro.volume_validado), else_=0.0)),
                     0.0,
@@ -134,7 +168,10 @@ class EstatisticasService:
                     func.sum(case((eh_validado, Registro.valorestimado), else_=0.0)),
                     0.0,
                 ),
-                func.coalesce(func.avg(Registro.percentual_reciclado), 0.0),
+                func.coalesce(
+                    func.avg(case((_nao_rejeitado(), Registro.percentual_reciclado))),
+                    0.0,
+                ),
             ),
             usuario=usuario,
             empresa_id=empresa_id,
@@ -142,6 +179,8 @@ class EstatisticasService:
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
             material_id=material_id,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
         )
         (
             total,
@@ -175,6 +214,8 @@ class EstatisticasService:
         periodo: str | None = None,
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> list[EstatisticaMaterialItem]:
         eh_validado = Registro.status_validacao == StatusValidacao.VALIDADO
         query = self._filtrar_escopo_registros(
@@ -182,7 +223,7 @@ class EstatisticasService:
                 Material.id,
                 Material.categoria,
                 func.count(Registro.id),
-                func.coalesce(func.sum(Registro.volume_total_original), 0.0),
+                _volume_declarado(),
                 func.coalesce(
                     func.sum(case((eh_validado, Registro.volume_validado), else_=0.0)),
                     0.0,
@@ -201,6 +242,8 @@ class EstatisticasService:
             periodo=periodo,
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
         )
         linhas = (
             query.group_by(Material.id, Material.categoria)
@@ -228,6 +271,8 @@ class EstatisticasService:
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
         material_id: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> list[EstatisticaPeriodoItem]:
         eh_validado = Registro.status_validacao == StatusValidacao.VALIDADO
         eh_pendente = Registro.status_validacao == StatusValidacao.PENDENTE
@@ -241,7 +286,7 @@ class EstatisticasService:
                 func.coalesce(func.sum(case((eh_validado, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_pendente, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_rejeitado, 1), else_=0)), 0),
-                func.coalesce(func.sum(Registro.volume_total_original), 0.0),
+                _volume_declarado(),
                 func.coalesce(
                     func.sum(case((eh_validado, Registro.volume_validado), else_=0.0)),
                     0.0,
@@ -260,6 +305,8 @@ class EstatisticasService:
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
             material_id=material_id,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
         )
         linhas = query.group_by(Registro.periodo).order_by(Registro.periodo.asc()).all()
         return [
@@ -296,6 +343,8 @@ class EstatisticasService:
         periodo_fim: str | None = None,
         material_id: str | None = None,
         limit: int = 10,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> list[EstatisticaEmpresaItem]:
         eh_validado = Registro.status_validacao == StatusValidacao.VALIDADO
         eh_pendente = Registro.status_validacao == StatusValidacao.PENDENTE
@@ -321,7 +370,7 @@ class EstatisticasService:
                 func.coalesce(func.sum(case((eh_validado, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_pendente, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((eh_rejeitado, 1), else_=0)), 0),
-                func.coalesce(func.sum(Registro.volume_total_original), 0.0),
+                _volume_declarado(),
                 vol_val_soma,
                 carbono_soma,
                 func.coalesce(
@@ -340,6 +389,7 @@ class EstatisticasService:
             query = query.filter(Registro.periodo >= periodo_inicio)
         if periodo_fim:
             query = query.filter(Registro.periodo <= periodo_fim)
+        query = _filtrar_datas(query, data_inicio, data_fim)
 
         linhas = (
             query.group_by(
@@ -392,6 +442,8 @@ class EstatisticasService:
         periodo_inicio: str | None = None,
         periodo_fim: str | None = None,
         material_id: str | None = None,
+        data_inicio: datetime | None = None,
+        data_fim: datetime | None = None,
     ) -> DashboardResumoResponse:
         eh_prefeitura = usuario["user_type"] == "PREFEITURA"
         empresas_status: dict[str, int] | None = None
@@ -405,10 +457,13 @@ class EstatisticasService:
             ranking = self.ranking_empresas(
                 db=db,
                 prefeitura_id=prefeitura_id,
+                limit=LIMITE_EMPRESAS_DASHBOARD,
                 periodo=periodo,
                 periodo_inicio=periodo_inicio,
                 periodo_fim=periodo_fim,
                 material_id=material_id,
+                data_inicio=data_inicio,
+                data_fim=data_fim,
             )
 
         resumo = self.resumo_registros(
@@ -419,6 +474,8 @@ class EstatisticasService:
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
             material_id=material_id,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
         )
         reg_status = {
             StatusValidacao.PENDENTE.value: resumo.registros_pendentes,
@@ -439,6 +496,8 @@ class EstatisticasService:
                 periodo=periodo,
                 periodo_inicio=periodo_inicio,
                 periodo_fim=periodo_fim,
+                data_inicio=data_inicio,
+                data_fim=data_fim,
             ),
             por_periodo=self.por_periodo(
                 db=db,
@@ -447,6 +506,8 @@ class EstatisticasService:
                 periodo_inicio=periodo_inicio,
                 periodo_fim=periodo_fim,
                 material_id=material_id,
+                data_inicio=data_inicio,
+                data_fim=data_fim,
             ),
             ranking_empresas=ranking,
         )

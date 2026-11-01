@@ -571,9 +571,12 @@ class RelatorioConsolidadoResponse(BaseModel):
     entidade_nome: str
     municipio_nome: str | None = None
     agrupamento: AgrupamentoRelatorio
+    periodo_descricao: str = "Todo o histórico"
+    filtros_aplicados: list[str] = []
     gerado_em: datetime
     resumo: ResumoRegistrosResponse
     por_material: list[EstatisticaMaterialItem] = []
+    por_empresa: list[EstatisticaEmpresaItem] = []
     grupos: list[GrupoRelatorioItem] = []
 
 

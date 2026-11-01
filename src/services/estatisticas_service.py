@@ -46,6 +46,51 @@ def _volume_declarado():
     )
 
 
+def _mes_ano(periodo: str) -> str:
+    partes = periodo.split("-")
+    return f"{partes[1]}/{partes[0]}" if len(partes) == 2 else periodo
+
+
+def _data_curta(valor: str) -> str:
+    try:
+        return datetime.fromisoformat(valor).strftime("%d/%m/%Y")
+    except ValueError:
+        return valor
+
+
+def descrever_periodo(
+    periodo: str | None = None,
+    periodo_inicio: str | None = None,
+    periodo_fim: str | None = None,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+) -> str:
+    if periodo:
+        return _mes_ano(periodo)
+
+    inicio = (
+        _mes_ano(periodo_inicio)
+        if periodo_inicio
+        else _data_curta(data_inicio)
+        if data_inicio
+        else None
+    )
+    fim = (
+        _mes_ano(periodo_fim)
+        if periodo_fim
+        else _data_curta(data_fim)
+        if data_fim
+        else None
+    )
+    if inicio and fim:
+        return f"{inicio} a {fim}"
+    if inicio:
+        return f"Desde {inicio}"
+    if fim:
+        return f"Até {fim}"
+    return "Todo o histórico"
+
+
 def _filtrar_datas(
     query: ConsultaSQL,
     data_inicio: datetime | None = None,
@@ -561,6 +606,8 @@ class EstatisticasService:
         carb_anterior = 0.0
 
         for reg in registros:
+            if reg.status_validacao == StatusValidacao.REJEITADO:
+                continue
             dt = reg.created_at
             data_reg = dt.date() if isinstance(dt, datetime) else hoje
             validado = reg.status_validacao == StatusValidacao.VALIDADO
@@ -635,7 +682,9 @@ class EstatisticasService:
         """
         eh_prefeitura = usuario["user_type"] == "PREFEITURA"
         query = self._filtrar_escopo_registros(
-            db.query(Registro).options(joinedload(Registro.material)),
+            db.query(Registro).options(
+                joinedload(Registro.material), joinedload(Registro.empresa)
+            ),
             usuario=usuario,
             empresa_id=empresa_id,
             periodo=periodo,
@@ -686,6 +735,7 @@ class EstatisticasService:
 
         grupos_map: dict[str, dict[str, Any]] = {}
         materiais_geral: dict[str, dict[str, Any]] = {}
+        empresas_map: dict[str, dict[str, Any]] = {}
 
         tot_reg = 0
         tot_pen = 0
@@ -696,6 +746,7 @@ class EstatisticasService:
         carb_tot = 0.0
         val_tot = 0.0
         soma_perc = 0.0
+        qtd_perc = 0
 
         for reg in registros:
             chave, rotulo = chave_e_rotulo(reg)
@@ -703,7 +754,7 @@ class EstatisticasService:
             pendente = reg.status_validacao == StatusValidacao.PENDENTE
             rejeitado = not validado and not pendente
 
-            v_decl = float(reg.volume_total_original or 0.0)
+            v_decl = 0.0 if rejeitado else float(reg.volume_total_original or 0.0)
             v_val = float(reg.volume_validado or 0.0) if validado else 0.0
             c_ev = float(reg.carbonoevitado or 0.0) if validado else 0.0
             v_est = float(reg.valorestimado or 0.0) if validado else 0.0
@@ -716,7 +767,35 @@ class EstatisticasService:
             vol_val_tot += v_val
             carb_tot += c_ev
             val_tot += v_est
-            soma_perc += float(reg.percentual_reciclado or 0.0)
+            if not rejeitado:
+                qtd_perc += 1
+                soma_perc += float(reg.percentual_reciclado or 0.0)
+
+            if reg.empresa:
+                emp = empresas_map.setdefault(
+                    reg.empresa_id,
+                    {
+                        "razao_social": reg.empresa.razao_social,
+                        "nome_fantasia": reg.empresa.nome_fantasia,
+                        "cnpj": reg.empresa.cnpj,
+                        "total": 0,
+                        "validados": 0,
+                        "pendentes": 0,
+                        "rejeitados": 0,
+                        "vol_decl": 0.0,
+                        "vol_val": 0.0,
+                        "carbono": 0.0,
+                        "valor": 0.0,
+                    },
+                )
+                emp["total"] += 1
+                emp["validados"] += int(validado)
+                emp["pendentes"] += int(pendente)
+                emp["rejeitados"] += int(rejeitado)
+                emp["vol_decl"] += v_decl
+                emp["vol_val"] += v_val
+                emp["carbono"] += c_ev
+                emp["valor"] += v_est
 
             grp = grupos_map.setdefault(
                 chave,
@@ -807,9 +886,47 @@ class EstatisticasService:
             carbono_total_evitado=_arredondar(carb_tot, 4),
             valor_total_estimado=_arredondar(val_tot),
             percentual_medio_reciclado=(
-                _arredondar(soma_perc / tot_reg) if tot_reg else 0.0
+                _arredondar(soma_perc / qtd_perc) if qtd_perc else 0.0
             ),
         )
+
+        por_empresa = (
+            sorted(
+                (
+                    EstatisticaEmpresaItem(
+                        empresa_id=e_id,
+                        razao_social=e["razao_social"],
+                        nome_fantasia=e["nome_fantasia"],
+                        cnpj=e["cnpj"],
+                        total_registros=e["total"],
+                        registros_validados=e["validados"],
+                        registros_pendentes=e["pendentes"],
+                        registros_rejeitados=e["rejeitados"],
+                        volume_declarado=_arredondar(e["vol_decl"]),
+                        volume_validado=_arredondar(e["vol_val"]),
+                        carbono_evitado=_arredondar(e["carbono"], 4),
+                        valor_estimado=_arredondar(e["valor"]),
+                    )
+                    for e_id, e in empresas_map.items()
+                ),
+                key=lambda item: (-item.carbono_evitado, -item.volume_validado),
+            )
+            if eh_prefeitura
+            else []
+        )
+
+        filtros: list[str] = []
+        if material_id:
+            material = db.get(Material, material_id)
+            filtros.append(
+                f"Material: {material.categoria if material else material_id}"
+            )
+        if eh_prefeitura and empresa_id:
+            empresa = db.get(Empresa, empresa_id)
+            if empresa and empresa.prefeitura_id == usuario["prefeitura_id"]:
+                filtros.append(
+                    f"Empresa: {empresa.nome_fantasia or empresa.razao_social}"
+                )
 
         municipio = usuario.get("prefeitura_nome")
         if eh_prefeitura and municipio:
@@ -822,9 +939,14 @@ class EstatisticasService:
             entidade_nome=entidade_nome,
             municipio_nome=municipio,
             agrupamento=agrupamento,
+            periodo_descricao=descrever_periodo(
+                periodo, periodo_inicio, periodo_fim, data_inicio, data_fim
+            ),
+            filtros_aplicados=filtros,
             gerado_em=datetime.now(UTC),
             resumo=resumo,
             por_material=converter_materiais(materiais_geral),
+            por_empresa=por_empresa,
             grupos=grupos,
         )
 

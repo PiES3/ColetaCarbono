@@ -2,6 +2,11 @@ from fpdf import FPDF
 
 from src.schemas.schemas import RelatorioConsolidadoResponse
 
+AVISO_CERTIFICACAO = (
+    "Documento de apoio à certificação por terceiros. Não é certificado e não "
+    "tem validade jurídica."
+)
+
 
 def _texto_pdf(texto: str) -> str:
     """Garante compatibilidade com fontes core Latin-1/CP1252 do PDF."""
@@ -47,7 +52,7 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
 
     # Cabeçalho ecológico verde
     pdf.set_fill_color(27, 94, 32)  # Verde floresta (#1B5E20)
-    pdf.rect(10, 10, 190, 26, style="F")
+    pdf.rect(10, 10, 190, 40, style="F")
 
     pdf.set_xy(15, 13)
     pdf.set_text_color(255, 255, 255)
@@ -69,7 +74,17 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
     )
     pdf.cell(0, 6, _texto_pdf(subtitulo), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.ln(10)
+    pdf.set_x(15)
+    linha_periodo = f"Período: {relatorio.periodo_descricao}"
+    if relatorio.municipio_nome:
+        linha_periodo = f"Município: {relatorio.municipio_nome} | {linha_periodo}"
+    pdf.cell(0, 6, _texto_pdf(linha_periodo), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_x(15)
+    filtros = "; ".join(relatorio.filtros_aplicados) or "nenhum"
+    pdf.cell(0, 6, _texto_pdf(f"Filtros: {filtros}"), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_y(56)
 
     # Cards de KPIs principais
     resumo = relatorio.resumo
@@ -196,5 +211,55 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
             pdf.cell(col_per[3], 7, f"{grp.carbono_evitado:,.4f}", border=1, align="R")
             pdf.cell(col_per[4], 7, f"{grp.valor_estimado:,.2f}", border=1, align="R")
             pdf.ln()
+
+    if relatorio.por_empresa:
+        pdf.ln(6)
+        pdf.set_text_color(27, 94, 32)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(
+            0,
+            8,
+            _texto_pdf("3. Consolidado por Empresa"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+        col_emp = [70, 22, 32, 34, 32]
+        cab_emp = [
+            "Empresa",
+            "Val/Tot",
+            "Vol. Validado (t)",
+            "CO2 Evitado (t)",
+            "Valor Est. (R$)",
+        ]
+
+        pdf.set_fill_color(46, 125, 50)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 9)
+        for larg, texto in zip(col_emp, cab_emp, strict=True):
+            pdf.cell(larg, 7, _texto_pdf(texto), border=1, fill=True, align="C")
+        pdf.ln()
+
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(33, 37, 41)
+        for emp in relatorio.por_empresa:
+            nome = emp.nome_fantasia or emp.razao_social
+            pdf.cell(col_emp[0], 7, _texto_pdf(nome[:38]), border=1)
+            pdf.cell(
+                col_emp[1],
+                7,
+                f"{emp.registros_validados}/{emp.total_registros}",
+                border=1,
+                align="C",
+            )
+            pdf.cell(col_emp[2], 7, f"{emp.volume_validado:,.2f}", border=1, align="R")
+            pdf.cell(col_emp[3], 7, f"{emp.carbono_evitado:,.4f}", border=1, align="R")
+            pdf.cell(col_emp[4], 7, f"{emp.valor_estimado:,.2f}", border=1, align="R")
+            pdf.ln()
+
+    pdf.ln(8)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(100, 120, 100)
+    pdf.multi_cell(0, 4, _texto_pdf(AVISO_CERTIFICACAO))
 
     return bytes(pdf.output())

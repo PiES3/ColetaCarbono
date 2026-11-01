@@ -4,13 +4,22 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-from sqlalchemy import inspect
+from sqlalchemy import Boolean, Float, Integer, inspect, text
 
 from src.core.base import Base
 from src.core.config import CORS_ORIGINS, SEED_DEV_DATA
 from src.core.database import IS_SQLITE, engine
 from src.models import models  # noqa: F401  (registra as tabelas no metadata)
-from src.routers import auth, dashboard, empresas, materiais, prefeituras, registro
+from src.routers import (
+    auth,
+    dashboard,
+    empresas,
+    health,
+    materiais,
+    prefeituras,
+    registro,
+    relatorios,
+)
 
 SRC_DIR = Path(__file__).resolve().parent
 SCRIPT_SCHEMA = SRC_DIR / "create_db.sql"
@@ -29,11 +38,56 @@ def executar_script_sql(caminho: Path) -> None:
         conexao.close()
 
 
+def _ddl_coluna_aditiva_sqlite(coluna) -> str | None:
+    """Gera cláusula ADD COLUMN para colunas anuláveis ou com default escalar."""
+    if isinstance(coluna.type, Boolean):
+        padrao = " DEFAULT 0"
+    elif isinstance(coluna.type, Integer):
+        padrao = " DEFAULT 0" if not coluna.nullable else ""
+    elif isinstance(coluna.type, Float):
+        padrao = " DEFAULT 0.0" if not coluna.nullable else ""
+    else:
+        if not coluna.nullable and coluna.default is None:
+            return None
+        padrao = ""
+
+    tipo_sql = (
+        "INTEGER"
+        if isinstance(coluna.type, (Boolean, Integer))
+        else "REAL"
+        if isinstance(coluna.type, Float)
+        else "TEXT"
+    )
+    not_null = " NOT NULL" if (not coluna.nullable and padrao) else ""
+    return f"{coluna.name} {tipo_sql}{not_null}{padrao}"
+
+
+def migrar_colunas_ausentes() -> None:
+    """Aplica migração aditiva segura no SQLite para novas colunas do modelo."""
+    inspetor = inspect(engine)
+    tabelas = set(inspetor.get_table_names())
+    with engine.begin() as conn:
+        for tabela in Base.metadata.sorted_tables:
+            if tabela.name not in tabelas:
+                continue
+            existentes = {col["name"] for col in inspetor.get_columns(tabela.name)}
+            for coluna in tabela.columns:
+                if coluna.name in existentes:
+                    continue
+                definicao = _ddl_coluna_aditiva_sqlite(coluna)
+                if definicao:
+                    logger.info(
+                        f"Adicionando coluna ausente '{tabela.name}.{coluna.name}'"
+                    )
+                    conn.execute(
+                        text(f"ALTER TABLE {tabela.name} ADD COLUMN {definicao}")
+                    )
+
+
 def verificar_schema() -> None:
     """
-    `CREATE TABLE IF NOT EXISTS` não altera tabelas já existentes. Se o banco
-    foi criado por uma versão anterior, avisa com clareza em vez de falhar
-    depois com um erro genérico do SQLite.
+    Verifica se todas as tabelas e colunas esperadas pelos modelos existem no
+    banco após os scripts e migrações aditivas.
     """
     inspetor = inspect(engine)
     tabelas = set(inspetor.get_table_names())
@@ -60,6 +114,7 @@ def inicializar_banco() -> None:
         logger.info("Banco não-SQLite: os scripts de schema/seed não são aplicados.")
         return
     executar_script_sql(SCRIPT_SCHEMA)
+    migrar_colunas_ausentes()
     verificar_schema()
     if SEED_DEV_DATA:
         executar_script_sql(SCRIPT_SEED)
@@ -85,9 +140,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(registro.router)
 app.include_router(empresas.router)
 app.include_router(materiais.router)
 app.include_router(prefeituras.router)
 app.include_router(dashboard.router)
+app.include_router(relatorios.router)

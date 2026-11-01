@@ -13,7 +13,7 @@ from src.models.models import Empresa, Material, Registro
 from src.schemas.enums import StatusValidacao, StatusVinculo
 
 if TYPE_CHECKING:
-    from src.schemas.schemas import RegistroCreate
+    from src.schemas.schemas import RegistroCreate, SincronizacaoLoteResponse
 
 VALOR_TONELADA_CO2_USD = 5.0
 COTACAO_DOLAR_FALLBACK = 5.30
@@ -257,6 +257,104 @@ class RegistroService:
         db.refresh(novo_registro)
 
         return novo_registro
+
+    def sincronizar_lote(
+        self,
+        db: Session,
+        empresa_id: str,
+        itens: list[RegistroCreate],
+    ) -> SincronizacaoLoteResponse:
+        """
+        Sincroniza em lote registros coletados offline pelo app móvel (RNF#001).
+        Garante idempotência via `client_id`: reenviar o mesmo lote por falha de
+        conexão devolve o registro já existente em vez de duplicá-lo.
+        """
+        from src.schemas.schemas import (
+            ErroSincronizacaoItem,
+            RegistroResponse,
+            SincronizacaoLoteResponse,
+        )
+
+        ids_materiais = {item.material_id for item in itens}
+        materiais_validos = {
+            m_id
+            for (m_id,) in db.query(Material.id)
+            .filter(Material.id.in_(ids_materiais))
+            .all()
+        }
+
+        client_ids_lote = {
+            item.client_id.strip()
+            for item in itens
+            if item.client_id and item.client_id.strip()
+        }
+        existentes_por_client_id: dict[str, Registro] = {}
+        if client_ids_lote:
+            existentes = (
+                db.query(Registro)
+                .filter(
+                    Registro.empresa_id == empresa_id,
+                    Registro.client_id.in_(client_ids_lote),
+                )
+                .all()
+            )
+            existentes_por_client_id = {
+                reg.client_id: reg for reg in existentes if reg.client_id
+            }
+
+        criados: list[Registro] = []
+        resultado_ordenado: list[Registro] = []
+        erros: list[ErroSincronizacaoItem] = []
+        total_duplicados = 0
+
+        for indice, item in enumerate(itens):
+            cid = item.client_id.strip() if item.client_id else None
+            cid = cid or None
+
+            if cid and cid in existentes_por_client_id:
+                total_duplicados += 1
+                resultado_ordenado.append(existentes_por_client_id[cid])
+                continue
+
+            if item.material_id not in materiais_validos:
+                erros.append(
+                    ErroSincronizacaoItem(
+                        indice=indice,
+                        client_id=cid,
+                        erro=f"Material inválido: {item.material_id}.",
+                    )
+                )
+                continue
+
+            novo = Registro(
+                empresa_id=empresa_id,
+                material_id=item.material_id,
+                client_id=cid,
+                periodo=item.periodo,
+                volume_total_original=item.volume_total,
+                percentual_reciclado=item.percentual_reciclado,
+            )
+            db.add(novo)
+            criados.append(novo)
+            resultado_ordenado.append(novo)
+            if cid:
+                existentes_por_client_id[cid] = novo
+
+        if criados:
+            db.commit()
+            for novo in criados:
+                db.refresh(novo)
+
+        return SincronizacaoLoteResponse(
+            total_recebidos=len(itens),
+            total_criados=len(criados),
+            total_duplicados=total_duplicados,
+            total_erros=len(erros),
+            registros=[
+                RegistroResponse.model_validate(reg) for reg in resultado_ordenado
+            ],
+            erros=erros,
+        )
 
 
 registro_service = RegistroService()

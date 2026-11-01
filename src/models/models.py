@@ -1,13 +1,40 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.base import Base, TimestampMixin, gen_uuid
 from src.schemas.enums import Perfil, StatusValidacao, StatusVinculo
+
+CORES_CONAMA_275: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("papel", "papelao", "celulose"), "#0057B8"),  # Azul
+    (("plastico", "pet", "pvc", "pead", "polietileno"), "#D62828"),  # Vermelho
+    (("vidro",), "#2A9D49"),  # Verde
+    (("metal", "aluminio", "aco", "ferro", "lata", "cobre"), "#F4B400"),  # Amarelo
+    (("madeira",), "#212529"),  # Preto
+    (("organico", "compost"), "#6D4C41"),  # Marrom
+    (("perigoso", "pilha", "bateria"), "#F77F00"),  # Laranja
+    (("hospitalar", "saude"), "#EAEAEA"),  # Branco
+    (("radioativo",), "#7B2CBF"),  # Roxo
+)
+
+
+def cor_conama_por_categoria(categoria: str) -> str:
+    """Retorna o código hexadecimal CONAMA 275 correspondente à categoria."""
+    normalizada = (
+        unicodedata.normalize("NFKD", categoria or "")
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
+    for termos, cor in CORES_CONAMA_275:
+        if any(termo in normalizada for termo in termos):
+            return cor
+    return "#6C757D"  # Cinza (resíduo geral / não reciclável)
 
 
 class Prefeitura(Base, TimestampMixin):
@@ -44,6 +71,11 @@ class Empresa(Base, TimestampMixin):
         SQLEnum(StatusVinculo), default=StatusVinculo.AGUARDANDO_VALIDACAO
     )
     motivo_recusa: Mapped[str | None] = mapped_column(String, nullable=True)
+    desassociacao_solicitada: Mapped[bool] = mapped_column(Boolean, default=False)
+    motivo_desassociacao: Mapped[str | None] = mapped_column(String, nullable=True)
+    data_solicitacao_desassociacao: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     email_confirmado: Mapped[bool] = mapped_column(Boolean, default=False)
     email_pendente: Mapped[str | None] = mapped_column(String, nullable=True)
     token_confirmacao_email: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -84,15 +116,23 @@ class Material(Base, TimestampMixin):
 
     registros: Mapped[list[Registro]] = relationship(back_populates="material")
 
+    @property
+    def cor_conama(self) -> str:
+        return cor_conama_por_categoria(self.categoria)
+
 
 class Registro(Base, TimestampMixin):
     __tablename__ = "registros"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "client_id", name="uq_registros_empresa_client"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
     empresa_id: Mapped[str] = mapped_column(
         ForeignKey("empresas.id"), nullable=False, index=True
     )
     material_id: Mapped[str] = mapped_column(ForeignKey("materiais.id"), nullable=False)
+    client_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     validador_id: Mapped[str | None] = mapped_column(
         ForeignKey("usuarios_admin.id"), nullable=True

@@ -97,6 +97,60 @@ class EmpresaService:
         db.refresh(empresa)
         return empresa
 
+    def decidir_vinculo(
+        self,
+        db: Session,
+        empresa: Empresa,
+        novo_status: StatusVinculo,
+        motivo_recusa: str | None,
+    ) -> Empresa:
+        """
+        Aprova ou recusa o vínculo da empresa com a prefeitura (HU003).
+        A empresa é avisada do resultado por e-mail.
+        """
+        if novo_status == StatusVinculo.APROVADA and not empresa.email_confirmado:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A empresa ainda não confirmou o e-mail.",
+            )
+
+        if novo_status == StatusVinculo.RECUSADA and not motivo_recusa:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O motivo da recusa é obrigatório.",
+            )
+
+        empresa.empresa_status = novo_status
+        empresa.motivo_recusa = (
+            motivo_recusa if novo_status == StatusVinculo.RECUSADA else None
+        )
+
+        db.commit()
+        db.refresh(empresa)
+
+        prefeitura_nome = empresa.prefeitura.nome
+        if novo_status == StatusVinculo.APROVADA:
+            email_service.enviar(
+                destinatario=empresa.email,
+                assunto="ArClear: cadastro aprovado pela prefeitura",
+                corpo=(
+                    f"A Prefeitura de {prefeitura_nome} aprovou o vínculo da "
+                    f"empresa {empresa.razao_social}. Você já pode entrar no "
+                    "aplicativo e lançar seus resíduos."
+                ),
+            )
+        elif novo_status == StatusVinculo.RECUSADA:
+            email_service.enviar(
+                destinatario=empresa.email,
+                assunto="ArClear: cadastro recusado pela prefeitura",
+                corpo=(
+                    f"A Prefeitura de {prefeitura_nome} recusou o vínculo da "
+                    f"empresa {empresa.razao_social}. Motivo: {motivo_recusa}"
+                ),
+            )
+
+        return empresa
+
     def solicitar_desassociacao(
         self,
         db: Session,

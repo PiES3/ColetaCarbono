@@ -794,6 +794,55 @@ def test_approval_after_refusal_clears_reason(client: TestClient, db: Session):
     assert resposta.json()["motivo_recusa"] is None
 
 
+def test_approval_notifies_company_by_email(
+    client: TestClient, db: Session, emails_enviados: list[dict[str, str]]
+):
+    dados = nova_empresa("86420975000194", "aviso_aprovacao@teste.com")
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    client.get(
+        "/auth/confirm-email", params={"token": token_de_confirmacao(db, empresa_id)}
+    )
+    emails_enviados.clear()
+
+    resposta = client.patch(
+        f"/empresas/{empresa_id}/status",
+        json={"novo_status": "APROVADA"},
+        headers=auth_headers(client, "gestor@demo.com"),
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+
+    assert [e["destinatario"] for e in emails_enviados] == [dados["email"]]
+    assert "aprovado" in emails_enviados[0]["assunto"]
+    assert "Quixadá" in emails_enviados[0]["corpo"]
+
+
+def test_refusal_notifies_company_with_reason(
+    client: TestClient, db: Session, emails_enviados: list[dict[str, str]]
+):
+    dados = nova_empresa("97531864000171", "aviso_recusa@teste.com")
+    empresa_id = client.post("/auth/register", json=dados).json()["id"]
+    emails_enviados.clear()
+
+    resposta = client.patch(
+        f"/empresas/{empresa_id}/status",
+        json={"novo_status": "RECUSADA", "motivo_recusa": "CNPJ de outro município"},
+        headers=auth_headers(client, "gestor@demo.com"),
+    )
+    assert resposta.status_code == status.HTTP_200_OK
+
+    assert [e["destinatario"] for e in emails_enviados] == [dados["email"]]
+    assert "recusado" in emails_enviados[0]["assunto"]
+    assert "CNPJ de outro município" in emails_enviados[0]["corpo"]
+
+    sem_motivo = client.patch(
+        f"/empresas/{empresa_id}/status",
+        json={"novo_status": "RECUSADA"},
+        headers=auth_headers(client, "gestor@demo.com"),
+    )
+    assert sem_motivo.status_code == status.HTTP_400_BAD_REQUEST
+    assert len(emails_enviados) == 1
+
+
 def test_records_listing_pagination_is_bounded(client: TestClient):
     empresa = auth_headers(client, "empresa@demo.com")
     for parametros in ({"limit": 0}, {"limit": 501}, {"skip": -1}):

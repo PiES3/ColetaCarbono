@@ -299,34 +299,15 @@ def validar_vinculo_empresa(
     """
     Endpoint para o Gestor da prefeitura aprovar ou recusar o vínculo
     de uma empresa do seu município (HU003).
-    Se for recusada, o motivo passa a ser obrigatório.
+    Se for recusada, o motivo passa a ser obrigatório. A empresa recebe o
+    resultado por e-mail.
     """
-    empresa = empresa_do_municipio(db, empresa_id, usuario)
-    novo_status = dados_status.novo_status
-
-    if novo_status == StatusVinculo.APROVADA and not empresa.email_confirmado:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A empresa ainda não confirmou o e-mail.",
-        )
-
-    if novo_status == StatusVinculo.RECUSADA and not dados_status.motivo_recusa:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O motivo da recusa é obrigatório.",
-        )
-
-    empresa.empresa_status = novo_status
-    # O motivo só faz sentido enquanto a empresa estiver recusada; ao aprovar
-    # depois de uma recusa, o motivo antigo não deve continuar aparecendo.
-    empresa.motivo_recusa = (
-        dados_status.motivo_recusa if novo_status == StatusVinculo.RECUSADA else None
+    return empresa_service.decidir_vinculo(
+        db=db,
+        empresa=empresa_do_municipio(db, empresa_id, usuario),
+        novo_status=dados_status.novo_status,
+        motivo_recusa=dados_status.motivo_recusa,
     )
-
-    db.commit()
-    db.refresh(empresa)
-
-    return empresa
 
 
 @router.patch("/{empresa_id}/desassociacao", response_model=EmpresaResponse)

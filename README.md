@@ -20,6 +20,16 @@ contas de demonstração.
 > existentes. Se o schema mudar, apague o `carbono.db` para recriá-lo
 > (a aplicação avisa na inicialização quando detecta colunas ausentes).
 
+### Dados de demonstração
+
+```bash
+uv run python -m src.popular_banco
+```
+
+Cria empresas nos dois municípios, em todas as situações de vínculo, materiais
+cadastrados pelas prefeituras e lançamentos dos últimos 12 meses. Todas as
+contas usam a senha `demo123`. Se os dados já existirem, o comando não faz nada.
+
 ## Variáveis de ambiente
 
 Veja [`.env.example`](.env.example). As principais:

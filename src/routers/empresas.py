@@ -6,8 +6,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
-from src.core.security import require_empresa, require_superuser
+from src.core.security import get_current_user, require_empresa, require_superuser
 from src.models.models import Empresa
+from src.routers.parametros import PeriodoConsulta
 from src.schemas.enums import StatusVinculo
 from src.schemas.schemas import (
     DecisaoDesassociacaoRequest,
@@ -172,9 +173,9 @@ def listar_solicitacoes_desassociacao(
 def ranking_empresas_por_impacto(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(require_superuser)],
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
 ):
@@ -256,16 +257,19 @@ def listar_empresas(
 def obter_empresa(
     empresa_id: str,
     db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
 ):
     """
-    Obtém uma empresa pelo ID.
+    Obtém uma empresa pelo ID. A prefeitura vê as empresas do seu município, e
+    a empresa vê apenas os próprios dados.
     """
-    empresa = db.get(Empresa, empresa_id)
-    if not empresa:
+    if usuario.get("is_superuser"):
+        return empresa_do_municipio(db, empresa_id, usuario)
+    if usuario.get("empresa_id") != empresa_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada."
         )
-    return empresa
+    return empresa_do_usuario(db, usuario)
 
 
 @router.patch("/{empresa_id}", response_model=EmpresaResponse)

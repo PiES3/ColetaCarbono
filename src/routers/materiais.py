@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func
@@ -8,12 +8,15 @@ from src.core.database import get_db
 from src.core.security import get_current_user, require_superuser
 from src.models.models import Material, Registro
 from src.schemas.schemas import MaterialCreate, MaterialResponse, MaterialUpdate
+from src.services.material_service import materiais_visiveis, material_disponivel
 
 router = APIRouter(prefix="/materiais", tags=["Materiais"])
 
 
-def _obter_material_ou_404(db: Session, material_id: str) -> Material:
-    material = db.get(Material, material_id)
+def _obter_material_ou_404(
+    db: Session, material_id: str, usuario: dict[str, Any]
+) -> Material:
+    material = material_disponivel(db, material_id, usuario.get("prefeitura_id"))
     if not material:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -22,10 +25,25 @@ def _obter_material_ou_404(db: Session, material_id: str) -> Material:
     return material
 
 
+def _material_da_prefeitura(
+    db: Session, material_id: str, usuario: dict[str, Any]
+) -> Material:
+    material = _obter_material_ou_404(db, material_id, usuario)
+    if material.prefeitura_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Os materiais da lista IPCC não podem ser alterados nem excluídos.",
+        )
+    return material
+
+
 def _verificar_categoria_duplicada(
-    db: Session, categoria: str, ignorar_id: str | None = None
+    db: Session,
+    categoria: str,
+    prefeitura_id: str,
+    ignorar_id: str | None = None,
 ) -> None:
-    query = db.query(Material).filter(
+    query = materiais_visiveis(db, prefeitura_id).filter(
         func.lower(Material.categoria) == categoria.lower()
     )
     if ignorar_id:
@@ -41,18 +59,22 @@ def _verificar_categoria_duplicada(
     "/",
     response_model=MaterialResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_superuser)],
 )
 def criar_material(
-    material_in: MaterialCreate, db: Annotated[Session, Depends(get_db)]
+    material_in: MaterialCreate,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
-    Cria um novo material e o seu respetivo fator de emissão IPCC.
+    Cria um novo material e o seu respetivo fator de emissão, visível apenas
+    para o município da prefeitura que o cadastrou.
     Restrito à Prefeitura (Superusuário).
     """
-    _verificar_categoria_duplicada(db, material_in.categoria)
+    _verificar_categoria_duplicada(db, material_in.categoria, usuario["prefeitura_id"])
 
-    novo_material = Material(**material_in.model_dump())
+    novo_material = Material(
+        **material_in.model_dump(), prefeitura_id=usuario["prefeitura_id"]
+    )
 
     db.add(novo_material)
     db.commit()
@@ -61,57 +83,56 @@ def criar_material(
     return novo_material
 
 
-@router.get(
-    "/",
-    response_model=list[MaterialResponse],
-    dependencies=[Depends(get_current_user)],
-)
-def listar_materiais(db: Annotated[Session, Depends(get_db)]):
+@router.get("/", response_model=list[MaterialResponse])
+def listar_materiais(
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+):
     """
-    Lista todos os materiais cadastrados.
-    Utilizado pela aplicação móvel para popular as listas de seleção (dropdowns).
+    Lista os materiais da lista IPCC e os cadastrados pela prefeitura do
+    usuário. Utilizado pela aplicação móvel para popular as listas de seleção.
     """
-    return db.query(Material).order_by(Material.categoria).all()
+    return (
+        materiais_visiveis(db, usuario.get("prefeitura_id"))
+        .order_by(Material.categoria)
+        .all()
+    )
 
 
-@router.get(
-    "/{material_id}",
-    response_model=MaterialResponse,
-    dependencies=[Depends(get_current_user)],
-)
-def obter_material(material_id: str, db: Annotated[Session, Depends(get_db)]):
+@router.get("/{material_id}", response_model=MaterialResponse)
+def obter_material(
+    material_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(get_current_user)],
+):
     """
     Obtém os detalhes de um material específico pelo ID.
     """
-    return _obter_material_ou_404(db, material_id)
+    return _obter_material_ou_404(db, material_id, usuario)
 
 
-@router.patch(
-    "/{material_id}",
-    response_model=MaterialResponse,
-    dependencies=[Depends(require_superuser)],
-)
-@router.put(
-    "/{material_id}",
-    response_model=MaterialResponse,
-    dependencies=[Depends(require_superuser)],
-    include_in_schema=False,
-)
+@router.patch("/{material_id}", response_model=MaterialResponse)
+@router.put("/{material_id}", response_model=MaterialResponse, include_in_schema=False)
 def atualizar_material(
     material_id: str,
     dados: MaterialUpdate,
     db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
 ):
     """
-    Atualiza a categoria e/ou o fator de emissão IPCC de um material existente.
+    Atualiza a categoria e/ou o fator de emissão de um material cadastrado
+    pela prefeitura. Os materiais da lista IPCC não podem ser alterados.
     Restrito à Prefeitura (Superusuário).
     """
-    material = _obter_material_ou_404(db, material_id)
+    material = _material_da_prefeitura(db, material_id, usuario)
     alteracoes = dados.model_dump(exclude_unset=True)
 
     if "categoria" in alteracoes and alteracoes["categoria"] is not None:
         _verificar_categoria_duplicada(
-            db, alteracoes["categoria"], ignorar_id=material_id
+            db,
+            alteracoes["categoria"],
+            usuario["prefeitura_id"],
+            ignorar_id=material_id,
         )
         material.categoria = alteracoes["categoria"]
 
@@ -126,17 +147,18 @@ def atualizar_material(
     return material
 
 
-@router.delete(
-    "/{material_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_superuser)],
-)
-def excluir_material(material_id: str, db: Annotated[Session, Depends(get_db)]):
+@router.delete("/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
+def excluir_material(
+    material_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    usuario: Annotated[dict[str, Any], Depends(require_superuser)],
+):
     """
-    Remove um material cadastrado caso não possua registros vinculados.
+    Remove um material cadastrado pela prefeitura caso não possua registros
+    vinculados. Os materiais da lista IPCC não podem ser excluídos.
     Restrito à Prefeitura (Superusuário).
     """
-    material = _obter_material_ou_404(db, material_id)
+    material = _material_da_prefeitura(db, material_id, usuario)
 
     possui_registros = (
         db.query(Registro.id).filter(Registro.material_id == material_id).first()

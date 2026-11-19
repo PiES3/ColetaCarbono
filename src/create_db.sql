@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS materiais (
     id TEXT PRIMARY KEY,
     categoria TEXT NOT NULL,
     fator_emissaoipcc REAL NOT NULL,
+    prefeitura_id TEXT REFERENCES prefeituras(id),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted_at DATETIME
@@ -82,6 +83,9 @@ CREATE TABLE IF NOT EXISTS registros (
     status_validacao TEXT DEFAULT 'PENDENTE' 
         CHECK(status_validacao IN ('PENDENTE', 'VALIDADO', 'REJEITADO', 'RECUSADA')),
     motivo_rejeicao TEXT,
+    correcao_solicitada INTEGER NOT NULL DEFAULT 0,
+    motivo_correcao TEXT,
+    data_solicitacao_correcao DATETIME,
     volume_validado REAL,
     valorestimado REAL,
     carbonoevitado REAL,

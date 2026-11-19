@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from src.models.models import Empresa, Prefeitura
+from src.models.models import Empresa, Prefeitura, Registro
 from src.schemas.enums import StatusVinculo
 from tests.conftest import TestingSessionLocal
 
@@ -14,6 +14,10 @@ def _obter_token_gestor(client: TestClient) -> str:
     return login_resp.json()["access_token"]
 
 
+def _headers_empresa_demo(client: TestClient) -> dict[str, str]:
+    return {"Authorization": f"Bearer {_obter_token_empresa(client)}"}
+
+
 def _obter_token_empresa(client: TestClient) -> str:
     login_resp = client.post(
         "/auth/login",
@@ -21,11 +25,6 @@ def _obter_token_empresa(client: TestClient) -> str:
     )
     assert login_resp.status_code == 200
     return login_resp.json()["access_token"]
-
-
-# ============================================================================
-# Testes do Lançamento de Resíduos pelo Gestor da Prefeitura
-# ============================================================================
 
 
 def test_gestor_cria_registro_sucesso(client: TestClient):
@@ -63,7 +62,7 @@ def test_gestor_cria_registro_sucesso(client: TestClient):
     assert dados["status_validacao"] == "VALIDADO"
     assert dados["criado_por_gestor_id"] == "gestor-demo"
     assert dados["validador_id"] == "gestor-demo"
-    assert dados["carbonoevitado"] == 50.0  # 100 * (50/100) * 1.0 (ipcc do papel)
+    assert dados["carbonoevitado"] == 50.0
     assert dados["valorestimado"] is not None
     assert dados["valorestimado"] > 0
     assert dados["inserido_pela_prefeitura"] is True
@@ -97,7 +96,6 @@ def test_gestor_cria_registro_com_volume_validado_customizado(client: TestClient
     dados = response.json()
     assert dados["volume_total"] == 200.0
     assert dados["volume_validado"] == 180.0
-    # 180 * (100/100) * 1.0 = 180.0
     assert dados["carbonoevitado"] == 180.0
     assert dados["status_validacao"] == "VALIDADO"
     assert dados["inserido_pela_prefeitura"] is True
@@ -132,7 +130,6 @@ def test_empresa_visualiza_lancamento_no_historico(client: TestClient):
     registros = response.json()
     assert len(registros) > 0
 
-    # Localiza o registro lançado pela prefeitura
     registro_prefeitura = next(
         (r for r in registros if r["inserido_pela_prefeitura"] is True), None
     )
@@ -150,16 +147,17 @@ def test_empresa_cria_registro_normal_pendente(client: TestClient):
     com status PENDENTE e inserido_pela_prefeitura=False.
     """
     payload = {
-        "empresa_id": "empresa-demo",
         "material_id": "vidro",
         "periodo": "2026-10",
         "volume_total": 50.0,
         "percentual_reciclado": 80.0,
     }
+    headers = {"Authorization": f"Bearer {_obter_token_empresa(client)}"}
 
-    response = client.post("/registros/", json=payload)
+    response = client.post("/registros/", json=payload, headers=headers)
     assert response.status_code == 201
     dados = response.json()
+    assert dados["empresa_id"] == "empresa-demo"
 
     assert dados["status_validacao"] == "PENDENTE"
     assert dados["criado_por_gestor_id"] is None
@@ -196,11 +194,11 @@ def test_filtro_historico_apenas_prefeitura(client: TestClient):
             "volume_total": 60.0,
             "percentual_reciclado": 100.0,
         },
+        headers=_headers_empresa_demo(client),
     )
 
     token_empresa = _obter_token_empresa(client)
 
-    # Filtrar apenas prefeitura
     resp_pref = client.get(
         "/registros/?empresa_id=empresa-demo&apenas_prefeitura=true",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -212,7 +210,6 @@ def test_filtro_historico_apenas_prefeitura(client: TestClient):
         assert reg["inserido_pela_prefeitura"] is True
         assert reg["origem"] == "PREFEITURA"
 
-    # Filtrar apenas empresa
     resp_emp = client.get(
         "/registros/?empresa_id=empresa-demo&apenas_prefeitura=false",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -230,7 +227,6 @@ def test_gestor_nao_pode_lancar_para_empresa_de_outra_prefeitura(client: TestCli
     O gestor só pode lançar registros para empresas vinculadas à sua própria prefeitura.
     Se a empresa pertencer a outra prefeitura, a requisição deve ser rejeitada com 400.
     """
-    # Cria prefeitura B e empresa vinculada a B
     db = TestingSessionLocal()
     pref_b = Prefeitura(id="prefeitura-outra", nome="Outra Cidade")
     empresa_b = Empresa(
@@ -247,7 +243,7 @@ def test_gestor_nao_pode_lancar_para_empresa_de_outra_prefeitura(client: TestCli
     db.commit()
     db.close()
 
-    token_gestor = _obter_token_gestor(client)  # Gestor de 'prefeitura-quixada'
+    token_gestor = _obter_token_gestor(client)
 
     payload = {
         "empresa_id": "empresa-outra",
@@ -385,7 +381,6 @@ def test_gestor_lista_empresas_vinculadas_para_selecao(client: TestClient):
     """
     token_gestor = _obter_token_gestor(client)
 
-    # 1. Endpoint dedicado /empresas/vinculadas
     resp_vinculadas = client.get(
         "/empresas/vinculadas",
         headers={"Authorization": f"Bearer {token_gestor}"},
@@ -394,10 +389,8 @@ def test_gestor_lista_empresas_vinculadas_para_selecao(client: TestClient):
     empresas = resp_vinculadas.json()
     assert len(empresas) >= 1
     assert any(e["id"] == "empresa-demo" for e in empresas)
-    # Garante que não traz empresa de outra prefeitura
     assert all(e["prefeitura_id"] == "prefeitura-quixada" for e in empresas)
 
-    # 2. Endpoint geral /empresas/ com token de gestor filtra automaticamente
     resp_geral = client.get(
         "/empresas/",
         headers={"Authorization": f"Bearer {token_gestor}"},
@@ -454,17 +447,11 @@ def test_obter_registro_detalhado_por_id(client: TestClient):
     assert response.status_code == 404
 
 
-# ============================================================================
-# Testes de Validação Total / Parcial e Rejeição de Registros pelo Gestor
-# ============================================================================
-
-
 def test_gestor_valida_registro_volume_total(client: TestClient):
     """
     Testa a validação de um registro pendente pelo gestor utilizando o volume
     total informado pela empresa.
     """
-    # 1. Empresa cria um registro pendente
     resp_criacao = client.post(
         "/registros/",
         json={
@@ -474,13 +461,13 @@ def test_gestor_valida_registro_volume_total(client: TestClient):
             "volume_total": 120.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_criacao.status_code == 201
     registro_id = resp_criacao.json()["id"]
 
     token_gestor = _obter_token_gestor(client)
 
-    # 2. Gestor valida o volume total sem passar volume_validado explícito
     resp_validacao = client.patch(
         f"/registros/{registro_id}/validar",
         json={},
@@ -490,7 +477,7 @@ def test_gestor_valida_registro_volume_total(client: TestClient):
     dados = resp_validacao.json()
     assert dados["status_validacao"] == "VALIDADO"
     assert dados["volume_validado"] == 120.0
-    assert dados["carbonoevitado"] == 60.0  # 120.0 * 0.5 * 1.0
+    assert dados["carbonoevitado"] == 60.0
     assert dados["validador_id"] == "gestor-demo"
     assert dados["motivo_rejeicao"] is None
 
@@ -509,6 +496,7 @@ def test_gestor_valida_registro_parcialmente(client: TestClient):
             "volume_total": 100.0,
             "percentual_reciclado": 100.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_criacao.status_code == 201
     registro_id = resp_criacao.json()["id"]
@@ -525,7 +513,7 @@ def test_gestor_valida_registro_parcialmente(client: TestClient):
     assert dados["status_validacao"] == "VALIDADO"
     assert dados["volume_total"] == 100.0
     assert dados["volume_validado"] == 70.0
-    assert dados["carbonoevitado"] == 70.0  # 70 * 1.0 * 1.0
+    assert dados["carbonoevitado"] == 70.0
     assert dados["validador_id"] == "gestor-demo"
 
 
@@ -543,13 +531,13 @@ def test_gestor_rejeita_registro_com_motivo_sucesso(client: TestClient):
             "volume_total": 80.0,
             "percentual_reciclado": 100.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_criacao.status_code == 201
     registro_id = resp_criacao.json()["id"]
 
     token_gestor = _obter_token_gestor(client)
 
-    # Gestor rejeita o registro informando o motivo
     motivo = "Lote contaminado com resíduos orgânicos e nota fiscal divergente."
     response = client.patch(
         f"/registros/{registro_id}/rejeitar",
@@ -567,7 +555,6 @@ def test_gestor_rejeita_registro_com_motivo_sucesso(client: TestClient):
     assert dados["carbonoevitado"] is None
     assert dados["valorestimado"] is None
 
-    # Consulta individual para confirmar a persistência
     resp_get = client.get(
         f"/registros/{registro_id}",
         headers={"Authorization": f"Bearer {token_gestor}"},
@@ -590,6 +577,7 @@ def test_gestor_rejeita_registro_alias_motivo(client: TestClient):
             "volume_total": 45.0,
             "percentual_reciclado": 100.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_criacao.status_code == 201
     registro_id = resp_criacao.json()["id"]
@@ -621,13 +609,13 @@ def test_gestor_rejeita_registro_sem_motivo_deve_falhar(client: TestClient):
             "volume_total": 50.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_criacao.status_code == 201
     registro_id = resp_criacao.json()["id"]
 
     token_gestor = _obter_token_gestor(client)
 
-    # 1. Sem passar motivo no body
     resp_sem_motivo = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={},
@@ -636,7 +624,6 @@ def test_gestor_rejeita_registro_sem_motivo_deve_falhar(client: TestClient):
     assert resp_sem_motivo.status_code == 400
     assert resp_sem_motivo.json()["detail"] == "O motivo da rejeição é obrigatório."
 
-    # 2. Com string vazia
     resp_vazio = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={"motivo_rejeicao": ""},
@@ -645,7 +632,6 @@ def test_gestor_rejeita_registro_sem_motivo_deve_falhar(client: TestClient):
     assert resp_vazio.status_code == 400
     assert resp_vazio.json()["detail"] == "O motivo da rejeição é obrigatório."
 
-    # 3. Com apenas espaços em branco
     resp_espacos = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={"motivo_rejeicao": "   "},
@@ -670,12 +656,12 @@ def test_gestor_nao_pode_rejeitar_nem_validar_registro_ja_processado(
             "volume_total": 50.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     registro_id = resp_criacao.json()["id"]
 
     token_gestor = _obter_token_gestor(client)
 
-    # Rejeita na primeira tentativa
     resp_rej = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={"motivo_rejeicao": "Primeira rejeicao válida."},
@@ -683,7 +669,6 @@ def test_gestor_nao_pode_rejeitar_nem_validar_registro_ja_processado(
     )
     assert resp_rej.status_code == 200
 
-    # Tenta rejeitar novamente
     resp_rej_novamente = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={"motivo_rejeicao": "Segunda rejeicao."},
@@ -692,7 +677,6 @@ def test_gestor_nao_pode_rejeitar_nem_validar_registro_ja_processado(
     assert resp_rej_novamente.status_code == 400
     assert resp_rej_novamente.json()["detail"] == "Registro já processado"
 
-    # Tenta validar o registro rejeitado
     resp_val_novamente = client.patch(
         f"/registros/{registro_id}/validar",
         json={},
@@ -729,12 +713,12 @@ def test_empresa_nao_pode_rejeitar_nem_validar_registro(client: TestClient):
             "volume_total": 50.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     registro_id = resp_criacao.json()["id"]
 
     token_empresa = _obter_token_empresa(client)
 
-    # Empresa tenta validar
     resp_val = client.patch(
         f"/registros/{registro_id}/validar",
         json={},
@@ -743,7 +727,6 @@ def test_empresa_nao_pode_rejeitar_nem_validar_registro(client: TestClient):
     assert resp_val.status_code == 403
     assert resp_val.json()["detail"] == "Acesso restrito à Prefeitura (Superusuário)."
 
-    # Empresa tenta rejeitar
     resp_rej = client.patch(
         f"/registros/{registro_id}/rejeitar",
         json={"motivo_rejeicao": "Tentativa indevida"},
@@ -768,26 +751,21 @@ def test_gestor_outra_prefeitura_nao_pode_rejeitar(client: TestClient):
         pwd_hash="hashed_123",
         empresa_status=StatusVinculo.APROVADA,
     )
+    registro_b = Registro(
+        empresa_id="empresa-outra-rejeicao",
+        material_id="papel",
+        periodo="2026-10",
+        volume_total_original=100.0,
+        percentual_reciclado=50.0,
+    )
     db.add(pref_b)
     db.add(empresa_b)
+    db.add(registro_b)
     db.commit()
+    registro_id = registro_b.id
     db.close()
 
-    # Cria registro para a empresa de outra prefeitura
-    resp_criacao = client.post(
-        "/registros/",
-        json={
-            "empresa_id": "empresa-outra-rejeicao",
-            "material_id": "papel",
-            "periodo": "2026-10",
-            "volume_total": 100.0,
-            "percentual_reciclado": 50.0,
-        },
-    )
-    assert resp_criacao.status_code == 201
-    registro_id = resp_criacao.json()["id"]
-
-    token_gestor = _obter_token_gestor(client)  # Gestor de 'prefeitura-quixada'
+    token_gestor = _obter_token_gestor(client)
 
     response = client.patch(
         f"/registros/{registro_id}/rejeitar",
@@ -817,6 +795,7 @@ def test_filtro_historico_por_status_rejeitado(client: TestClient):
             "volume_total": 95.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     registro_id = resp_criacao.json()["id"]
 
@@ -843,11 +822,6 @@ def test_filtro_historico_por_status_rejeitado(client: TestClient):
     assert rejeitado["validador_id"] == "gestor-demo"
 
 
-# ============================================================================
-# Testes do Endpoint de Acompanhamento de Registros da Empresa
-# ============================================================================
-
-
 def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     """
     Testa o acompanhamento da situação dos registros lançados pela empresa:
@@ -858,7 +832,6 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     token_empresa = _obter_token_empresa(client)
     token_gestor = _obter_token_gestor(client)
 
-    # 1. Registro que permanecerá PENDENTE
     resp_pendente = client.post(
         "/registros/",
         json={
@@ -868,11 +841,11 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
             "volume_total": 50.0,
             "percentual_reciclado": 60.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_pendente.status_code == 201
     id_pendente = resp_pendente.json()["id"]
 
-    # 2. Registro que será VALIDADO pelo gestor
     resp_validar = client.post(
         "/registros/",
         json={
@@ -882,6 +855,7 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
             "volume_total": 100.0,
             "percentual_reciclado": 80.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_validar.status_code == 201
     id_validar = resp_validar.json()["id"]
@@ -893,7 +867,6 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     )
     assert resp_val_gestor.status_code == 200
 
-    # 3. Registro que será REJEITADO pelo gestor
     resp_rejeitar = client.post(
         "/registros/",
         json={
@@ -903,6 +876,7 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
             "volume_total": 70.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     assert resp_rejeitar.status_code == 201
     id_rejeitar = resp_rejeitar.json()["id"]
@@ -915,7 +889,6 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     )
     assert resp_rej_gestor.status_code == 200
 
-    # 4. Empresa consulta o acompanhamento de seus registros
     response = client.get(
         "/registros/acompanhamento",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -924,10 +897,8 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     lista = response.json()
     assert len(lista) >= 3
 
-    # Mapeia pelos IDs para validações precisas
     mapa = {r["id"]: r for r in lista}
 
-    # Valida registro Pendente
     reg_pendente = mapa[id_pendente]
     assert reg_pendente["status"] == "PENDENTE"
     assert reg_pendente["status_validacao"] == "PENDENTE"
@@ -936,7 +907,6 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     assert reg_pendente["data_validacao"] is None
     assert reg_pendente["validador_nome"] is None
 
-    # Valida registro Validado
     reg_validado = mapa[id_validar]
     assert reg_validado["status"] == "VALIDADO"
     assert reg_validado["status_validacao"] == "VALIDADO"
@@ -946,7 +916,6 @@ def test_empresa_acompanha_situacao_dos_seus_registros(client: TestClient):
     assert reg_validado["nome_validador"] == "Gestor Demo"
     assert reg_validado["volume_validado"] == 90.0
 
-    # Valida registro Rejeitado
     reg_rejeitado = mapa[id_rejeitar]
     assert reg_rejeitado["status"] == "REJEITADO"
     assert reg_rejeitado["status_validacao"] == "REJEITADO"
@@ -963,7 +932,6 @@ def test_empresa_acompanhamento_filtro_status(client: TestClient):
     """
     token_empresa = _obter_token_empresa(client)
 
-    # Filtrar por status=validado
     resp_val = client.get(
         "/registros/acompanhamento?status=validado",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -976,7 +944,6 @@ def test_empresa_acompanhamento_filtro_status(client: TestClient):
         assert item["data_validacao"] is not None
         assert item["validador_nome"] is not None
 
-    # Filtrar por status=rejeitado
     resp_rej = client.get(
         "/registros/acompanhamento?status=rejeitado",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -988,7 +955,6 @@ def test_empresa_acompanhamento_filtro_status(client: TestClient):
         assert item["status_validacao"] == "REJEITADO"
         assert item["motivo_rejeicao"] is not None
 
-    # Filtrar por status=pendente
     resp_pen = client.get(
         "/registros/acompanhamento?status=pendente",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -1006,7 +972,6 @@ def test_empresa_acompanhamento_filtro_periodo(client: TestClient):
     """
     token_empresa = _obter_token_empresa(client)
 
-    # Cria registros com períodos distintos
     client.post(
         "/registros/",
         json={
@@ -1016,6 +981,7 @@ def test_empresa_acompanhamento_filtro_periodo(client: TestClient):
             "volume_total": 40.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     client.post(
         "/registros/",
@@ -1026,9 +992,9 @@ def test_empresa_acompanhamento_filtro_periodo(client: TestClient):
             "volume_total": 55.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
 
-    # Filtra período exato 2026-05
     resp_p = client.get(
         "/registros/acompanhamento?periodo=2026-05",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -1038,7 +1004,6 @@ def test_empresa_acompanhamento_filtro_periodo(client: TestClient):
     assert len(itens_p) > 0
     assert all(i["periodo"] == "2026-05" for i in itens_p)
 
-    # Filtra faixa de período (2026-05 a 2026-06)
     resp_faixa = client.get(
         "/registros/acompanhamento?periodo_inicio=2026-05&periodo_fim=2026-06",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -1056,7 +1021,6 @@ def test_empresa_acompanhamento_aliases_e_seguranca(client: TestClient):
     """
     token_empresa = _obter_token_empresa(client)
 
-    # Rota alias /registros/empresa
     resp_alias = client.get(
         "/registros/empresa",
         headers={"Authorization": f"Bearer {token_empresa}"},
@@ -1064,7 +1028,6 @@ def test_empresa_acompanhamento_aliases_e_seguranca(client: TestClient):
     assert resp_alias.status_code == 200
     assert isinstance(resp_alias.json(), list)
 
-    # Sem autenticação e sem empresa_id -> 401
     resp_unauth = client.get("/registros/acompanhamento")
     assert resp_unauth.status_code == 401
 
@@ -1111,6 +1074,7 @@ def test_validacao_exige_login_da_prefeitura(client: TestClient):
             "volume_total": 10.0,
             "percentual_reciclado": 50.0,
         },
+        headers=_headers_empresa_demo(client),
     )
     registro_id = resp_criacao.json()["id"]
 
@@ -1168,6 +1132,7 @@ def test_rejeitados_ficam_fora_dos_totais(client: TestClient, monkeypatch):
                 "volume_total": volume,
                 "percentual_reciclado": percentual,
             },
+            headers=_headers_empresa_demo(client),
         )
         assert resposta.status_code == 201
         return resposta.json()["id"]
@@ -1236,11 +1201,6 @@ def test_dashboard_filtra_pela_data_do_lancamento(client: TestClient):
     assert futuro["por_material"] == []
 
 
-# ============================================================================
-# Testes de Estatísticas e Dashboard Completo
-# ============================================================================
-
-
 def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     monkeypatch.setattr(
         "src.services.services.obter_cotacao_dolar", lambda *_args, **_kw: 5.0
@@ -1251,7 +1211,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
     headers_empresa = {"Authorization": f"Bearer {token_empresa}"}
 
-    # Sem autenticação -> 401
     assert client.get("/dashboard/").status_code == 401
     assert client.get("/registros/estatisticas/resumo").status_code == 401
     assert client.get("/registros/estatisticas/status").status_code == 401
@@ -1260,7 +1219,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert client.get("/registros/estatisticas/por-empresa").status_code == 401
     assert client.get("/empresas/estatisticas/ranking").status_code == 401
 
-    # Empresa não pode acessar rotas exclusivas da prefeitura -> 403
     assert (
         client.get(
             "/registros/estatisticas/por-empresa", headers=headers_empresa
@@ -1274,7 +1232,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
         == 403
     )
 
-    # Resumo geral da prefeitura
     resp_resumo = client.get("/registros/estatisticas/resumo", headers=headers_gestor)
     assert resp_resumo.status_code == 200
     resumo = resp_resumo.json()
@@ -1288,14 +1245,12 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert resumo["carbono_total_evitado"] > 0
     assert resumo["valor_total_estimado"] > 0
 
-    # Contagem por status
     resp_status = client.get("/registros/estatisticas/status", headers=headers_gestor)
     assert resp_status.status_code == 200
     contagens_status = resp_status.json()
     assert set(contagens_status) >= {"PENDENTE", "VALIDADO", "REJEITADO"}
     assert contagens_status["VALIDADO"] == resumo["registros_validados"]
 
-    # Detalhamento por material
     resp_mat = client.get(
         "/registros/estatisticas/por-material", headers=headers_gestor
     )
@@ -1304,7 +1259,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert len(materiais) >= 2
     assert {m["material_id"] for m in materiais} >= {"papel", "plastico"}
 
-    # Evolução por período
     resp_per = client.get(
         "/registros/estatisticas/por-periodo?periodo_inicio=2026-05&periodo_fim=2026-10",
         headers=headers_gestor,
@@ -1314,7 +1268,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert len(periodos) >= 2
     assert [p["periodo"] for p in periodos] == sorted(p["periodo"] for p in periodos)
 
-    # Ranking de empresas (prefeitura)
     resp_rank = client.get("/empresas/estatisticas/ranking", headers=headers_gestor)
     assert resp_rank.status_code == 200
     ranking = resp_rank.json()
@@ -1327,7 +1280,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert resp_por_emp.status_code == 200
     assert resp_por_emp.json() == ranking
 
-    # Dashboard consolidado (visão Prefeitura)
     resp_dash_pref = client.get("/dashboard/", headers=headers_gestor)
     assert resp_dash_pref.status_code == 200
     dash_pref = resp_dash_pref.json()
@@ -1340,7 +1292,6 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert len(dash_pref["por_periodo"]) >= 2
     assert len(dash_pref["ranking_empresas"]) >= 1
 
-    # Dashboard consolidado (visão Empresa: isolada aos próprios dados)
     resp_dash_emp = client.get("/dashboard/resumo", headers=headers_empresa)
     assert resp_dash_emp.status_code == 200
     dash_emp = resp_dash_emp.json()
@@ -1351,18 +1302,12 @@ def test_dashboard_e_estatisticas_completas(client: TestClient, monkeypatch):
     assert dash_emp["resumo_registros"]["total_registros"] > 0
 
 
-# ============================================================================
-# Testes do CRUD Completo de Materiais
-# ============================================================================
-
-
 def test_crud_completo_de_materiais(client: TestClient):
     token_gestor = _obter_token_gestor(client)
     token_empresa = _obter_token_empresa(client)
     headers_gestor = {"Authorization": f"Bearer {token_gestor}"}
     headers_empresa = {"Authorization": f"Bearer {token_empresa}"}
 
-    # 1. Criar novo material (Prefeitura)
     resp_create = client.post(
         "/materiais/",
         json={"categoria": "  Alumínio  ", "fator_emissaoipcc": 2.5},
@@ -1374,7 +1319,6 @@ def test_crud_completo_de_materiais(client: TestClient):
     assert criado["categoria"] == "Alumínio"
     assert criado["fator_emissaoipcc"] == 2.5
 
-    # 2. Impede categoria duplicada (case-insensitive)
     resp_dup = client.post(
         "/materiais/",
         json={"categoria": "alumínio", "fator_emissaoipcc": 3.0},
@@ -1383,7 +1327,6 @@ def test_crud_completo_de_materiais(client: TestClient):
     assert resp_dup.status_code == 400
     assert resp_dup.json()["detail"] == "Já existe um material com esta categoria."
 
-    # 3. Obter material por ID (acessível por empresa e prefeitura)
     resp_get = client.get(f"/materiais/{material_id}", headers=headers_empresa)
     assert resp_get.status_code == 200
     assert resp_get.json()["id"] == material_id
@@ -1394,7 +1337,6 @@ def test_crud_completo_de_materiais(client: TestClient):
         == 404
     )
 
-    # 4. Atualizar material (restrito à prefeitura)
     assert (
         client.patch(
             f"/materiais/{material_id}",
@@ -1413,7 +1355,6 @@ def test_crud_completo_de_materiais(client: TestClient):
     assert resp_patch.json()["categoria"] == "Alumínio Reciclado"
     assert resp_patch.json()["fator_emissaoipcc"] == 3.2
 
-    # Não permite renomear para categoria já existente em outro material
     resp_patch_dup = client.patch(
         f"/materiais/{material_id}",
         json={"categoria": "Papel"},
@@ -1421,21 +1362,41 @@ def test_crud_completo_de_materiais(client: TestClient):
     )
     assert resp_patch_dup.status_code == 400
 
-    # 5. Excluir material em uso por registros -> 400
-    resp_del_em_uso = client.delete("/materiais/papel", headers=headers_gestor)
+    resp_del_ipcc = client.delete("/materiais/papel", headers=headers_gestor)
+    assert resp_del_ipcc.status_code == 403
+
+    em_uso = client.post(
+        "/materiais/",
+        json={"categoria": "Isopor", "fator_emissaoipcc": 1.5},
+        headers=headers_gestor,
+    ).json()
+    assert (
+        client.post(
+            "/registros/",
+            json={
+                "material_id": em_uso["id"],
+                "periodo": "2026-10",
+                "volume_total": 2.0,
+                "percentual_reciclado": 50.0,
+            },
+            headers=headers_empresa,
+        ).status_code
+        == 201
+    )
+    resp_del_em_uso = client.delete(
+        f"/materiais/{em_uso['id']}", headers=headers_gestor
+    )
     assert resp_del_em_uso.status_code == 400
     assert (
         resp_del_em_uso.json()["detail"]
         == "Não é possível excluir um material que possui registros vinculados."
     )
 
-    # 6. Empresa não pode excluir material -> 403
     assert (
         client.delete(f"/materiais/{material_id}", headers=headers_empresa).status_code
         == 403
     )
 
-    # 7. Excluir material sem registros vinculados -> 204
     resp_del = client.delete(f"/materiais/{material_id}", headers=headers_gestor)
     assert resp_del.status_code == 204
     assert (

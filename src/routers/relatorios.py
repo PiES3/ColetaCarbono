@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.core.security import get_current_user
+from src.routers.parametros import PeriodoConsulta
 from src.schemas.enums import AgrupamentoRelatorio
 from src.schemas.schemas import RelatorioConsolidadoResponse
 from src.services.estatisticas_service import estatisticas_service
@@ -20,9 +21,9 @@ def obter_relatorio_consolidado(
     agrupamento: AgrupamentoRelatorio = AgrupamentoRelatorio.MENSAL,
     empresa_id: str | None = None,
     material_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
 ):
@@ -56,9 +57,9 @@ def exportar_relatorio_pdf(
     agrupamento: AgrupamentoRelatorio = AgrupamentoRelatorio.MENSAL,
     empresa_id: str | None = None,
     material_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
 ):

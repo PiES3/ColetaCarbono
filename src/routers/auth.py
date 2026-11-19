@@ -1,6 +1,8 @@
+from html import escape
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
@@ -19,6 +21,46 @@ from src.schemas.schemas import (
 from src.services.auth_service import auth_service
 
 router = APIRouter(prefix="/auth", tags=["Autenticação"])
+
+PAGINA_CONFIRMACAO = """<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArClear</title>
+<style>
+body {{ margin: 0; min-height: 100vh; display: flex; align-items: center;
+  justify-content: center; background: #f2f3f2; color: #181b19;
+  font-family: Roboto, system-ui, sans-serif; }}
+main {{ max-width: 380px; margin: 16px; padding: 32px 24px; background: #fff;
+  border-radius: 16px; text-align: center; }}
+h1 {{ margin: 0 0 4px; font-size: 32px; color: #359759; font-weight: 400; }}
+h2 {{ margin: 24px 0 8px; font-size: 20px; color: {cor}; }}
+p {{ margin: 0; font-size: 16px; line-height: 1.5; color: #444a45; }}
+</style>
+</head>
+<body>
+<main>
+<h1>ArClear</h1>
+<h2>{titulo}</h2>
+<p>{mensagem}</p>
+</main>
+</body>
+</html>
+"""
+
+
+def pagina_confirmacao(
+    titulo: str, mensagem: str, sucesso: bool, status_code: int = 200
+) -> HTMLResponse:
+    return HTMLResponse(
+        PAGINA_CONFIRMACAO.format(
+            titulo=escape(titulo),
+            mensagem=escape(mensagem),
+            cor="#1b5e20" if sucesso else "#b3261e",
+        ),
+        status_code=status_code,
+    )
 
 
 @router.post(
@@ -118,12 +160,29 @@ def redefinir_senha(
     response_model=MessageResponse,
     summary="Confirmar o e-mail da empresa",
 )
-def confirmar_email(token: str, db: Annotated[Session, Depends(get_db)]):
+def confirmar_email(
+    token: str, request: Request, db: Annotated[Session, Depends(get_db)]
+):
     """
     Confirma o e-mail pelo link enviado no cadastro. Depois disso, o cadastro
-    entra na fila de aprovação do gestor da prefeitura.
+    entra na fila de aprovação do gestor da prefeitura. Aberto no navegador, o
+    link mostra uma página com o resultado, em vez do JSON.
     """
-    return auth_service.confirm_email(db=db, token=token)
+    quer_pagina = "text/html" in request.headers.get("accept", "")
+    try:
+        resultado = auth_service.confirm_email(db=db, token=token)
+    except HTTPException as erro:
+        if not quer_pagina:
+            raise
+        return pagina_confirmacao(
+            "Não foi possível confirmar",
+            str(erro.detail),
+            sucesso=False,
+            status_code=erro.status_code,
+        )
+    if quer_pagina:
+        return pagina_confirmacao("E-mail confirmado", resultado["message"], True)
+    return resultado
 
 
 @router.post(

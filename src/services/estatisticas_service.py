@@ -728,7 +728,6 @@ class EstatisticasService:
                     f"({inicio_sem.strftime('%d/%m')} a {fim_sem.strftime('%d/%m')})"
                 )
                 return chave, rotulo
-            # MENSAL
             partes = reg.periodo.split("-")
             rotulo = f"{partes[1]}/{partes[0]}" if len(partes) == 2 else reg.periodo
             return reg.periodo, rotulo

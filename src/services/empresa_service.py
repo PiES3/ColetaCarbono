@@ -72,7 +72,8 @@ class EmpresaService:
             empresa.cnpj = novo_cnpj
 
         novo_email = alteracoes.pop("email", None)
-        if novo_email and novo_email not in (empresa.email, empresa.email_pendente):
+        atuais = {(empresa.email or "").lower(), (empresa.email_pendente or "").lower()}
+        if novo_email and novo_email.lower() not in atuais:
             if auth_service.email_em_uso(db, novo_email, ignorar_empresa_id=empresa.id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

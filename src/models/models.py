@@ -16,15 +16,15 @@ from src.schemas.enums import (
 )
 
 CORES_CONAMA_275: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("papel", "papelao", "celulose"), "#0057B8"),  # Azul
-    (("plastico", "pet", "pvc", "pead", "polietileno"), "#D62828"),  # Vermelho
-    (("vidro",), "#2A9D49"),  # Verde
-    (("metal", "aluminio", "aco", "ferro", "lata", "cobre"), "#F4B400"),  # Amarelo
-    (("madeira",), "#212529"),  # Preto
-    (("organico", "compost"), "#6D4C41"),  # Marrom
-    (("perigoso", "pilha", "bateria"), "#F77F00"),  # Laranja
-    (("hospitalar", "saude"), "#EAEAEA"),  # Branco
-    (("radioativo",), "#7B2CBF"),  # Roxo
+    (("papel", "papelao", "celulose"), "#0057B8"),
+    (("plastico", "pet", "pvc", "pead", "polietileno"), "#D62828"),
+    (("vidro",), "#2A9D49"),
+    (("metal", "aluminio", "aco", "ferro", "lata", "cobre"), "#F4B400"),
+    (("madeira",), "#212529"),
+    (("organico", "compost"), "#6D4C41"),
+    (("perigoso", "pilha", "bateria"), "#F77F00"),
+    (("hospitalar", "saude"), "#EAEAEA"),
+    (("radioativo",), "#7B2CBF"),
 )
 
 
@@ -39,7 +39,7 @@ def cor_conama_por_categoria(categoria: str) -> str:
     for termos, cor in CORES_CONAMA_275:
         if any(termo in normalizada for termo in termos):
             return cor
-    return "#6C757D"  # Cinza (resíduo geral / não reciclável)
+    return "#6C757D"
 
 
 class Prefeitura(Base, TimestampMixin):
@@ -118,6 +118,9 @@ class Material(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
     categoria: Mapped[str] = mapped_column(String, nullable=False)
     fator_emissaoipcc: Mapped[float] = mapped_column(Float, nullable=False)
+    prefeitura_id: Mapped[str | None] = mapped_column(
+        ForeignKey("prefeituras.id"), nullable=True
+    )
 
     registros: Mapped[list[Registro]] = relationship(back_populates="material")
 
@@ -154,6 +157,11 @@ class Registro(Base, TimestampMixin):
         SQLEnum(StatusValidacao), default=StatusValidacao.PENDENTE
     )
     motivo_rejeicao: Mapped[str | None] = mapped_column(String, nullable=True)
+    correcao_solicitada: Mapped[bool] = mapped_column(Boolean, default=False)
+    motivo_correcao: Mapped[str | None] = mapped_column(String, nullable=True)
+    data_solicitacao_correcao: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
 
     volume_validado: Mapped[float | None] = mapped_column(Float, nullable=True)
     valorestimado: Mapped[float | None] = mapped_column(Float, nullable=True)

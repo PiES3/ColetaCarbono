@@ -39,7 +39,6 @@ __all__ = [
 
 ALGORITHM = "HS256"
 SENHA_TAMANHO_MIN = 8
-# O bcrypt considera apenas os primeiros 72 bytes da senha.
 SENHA_BYTES_MAX = 72
 
 http_bearer = HTTPBearer(auto_error=False)
@@ -107,12 +106,10 @@ def verify_password(plain_password: str, hashed_password: str | None) -> bool:
         return False
     senha = plain_password.encode("utf-8")
     if len(senha) > SENHA_BYTES_MAX:
-        # bcrypt >= 5 rejeita senhas maiores que 72 bytes com ValueError.
         return False
     try:
         return bcrypt.checkpw(senha, hashed_password.encode("utf-8"))
     except ValueError:
-        # Hash malformado no banco: trata como senha incorreta.
         return False
 
 
@@ -272,6 +269,40 @@ def get_current_user_optional(
         return None
 
 
+def bloqueio_da_empresa(empresa: Empresa) -> tuple[str, str] | None:
+    """
+    Diz por que a empresa não pode usar o sistema, como (código, mensagem), ou
+    None quando o vínculo com a prefeitura está aprovado.
+    """
+    if empresa.empresa_status == StatusVinculo.APROVADA:
+        return None
+
+    prefeitura = f"Prefeitura de {empresa.prefeitura.nome}"
+
+    if empresa.empresa_status == StatusVinculo.AGUARDANDO_VALIDACAO:
+        if not empresa.email_confirmado:
+            return (
+                "EMAIL_NAO_CONFIRMADO",
+                f"Enviamos um link para {empresa.email}. Depois de confirmar, "
+                f"a {prefeitura} analisa seu cadastro.",
+            )
+        return (
+            "CADASTRO_PENDENTE",
+            f"Seu e-mail já foi confirmado. Falta a {prefeitura} aprovar "
+            "o vínculo da sua empresa. Avisaremos por e-mail.",
+        )
+    if empresa.empresa_status == StatusVinculo.RECUSADA:
+        motivo = empresa.motivo_recusa or "não informado"
+        return (
+            "CADASTRO_RECUSADO",
+            f"A {prefeitura} recusou o vínculo. Motivo: {motivo}",
+        )
+    return (
+        "CADASTRO_DESASSOCIADO",
+        f"Sua empresa não está mais vinculada à {prefeitura}.",
+    )
+
+
 def require_empresa(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> dict[str, Any]:
@@ -282,8 +313,19 @@ def require_empresa(
             detail="Acesso restrito a Empresas.",
         )
     if current_user.get("status_vinculo") != StatusVinculo.APROVADA:
+        instancia = current_user.get("instance")
+        empresa = (
+            instancia
+            if isinstance(instancia, Empresa)
+            else getattr(instancia, "empresa", None)
+        )
+        bloqueio = bloqueio_da_empresa(empresa) if empresa else None
+        codigo, mensagem = bloqueio or (
+            "VINCULO_NAO_APROVADO",
+            "O vínculo da empresa com a prefeitura não está aprovado.",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="O vínculo da empresa com a prefeitura não está aprovado.",
+            detail={"codigo": codigo, "mensagem": mensagem},
         )
     return current_user

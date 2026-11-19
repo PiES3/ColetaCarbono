@@ -21,11 +21,6 @@ def auth_headers(
     return {"Authorization": f"Bearer {resposta.json()['access_token']}"}
 
 
-# ============================================================================
-# Testes de Autocadastro de Empresa
-# ============================================================================
-
-
 def nova_empresa(cnpj: str, email: str, **extras: str) -> dict[str, str]:
     return {
         "cnpj": cnpj,
@@ -189,11 +184,6 @@ def test_register_company_password_policy(client: TestClient):
     )
 
 
-# ============================================================================
-# Testes de Autenticação (Login)
-# ============================================================================
-
-
 def test_login_prefeitura_success(client: TestClient):
     response = client.post(
         "/auth/login", json={"email": "gestor@demo.com", "senha": "demo123"}
@@ -311,11 +301,6 @@ def test_resend_confirmation_same_message(client: TestClient):
 
     assert existente.status_code == status.HTTP_200_OK
     assert existente.json() == inexistente.json()
-
-
-# ============================================================================
-# Testes do Endpoint /auth/me e Permissões
-# ============================================================================
 
 
 def test_auth_me_prefeitura(client: TestClient):
@@ -533,11 +518,6 @@ def test_company_status_statistics_restricted_to_own_city(client: TestClient):
     assert resposta.json() == {"APROVADA": 1}
 
 
-# ============================================================================
-# Testes de Edição dos Dados Cadastrais da Empresa
-# ============================================================================
-
-
 def token_de_confirmacao(db: Session, empresa_id: str) -> str:
     db.expire_all()
     empresa = db.query(Empresa).filter(Empresa.id == empresa_id).first()
@@ -682,11 +662,6 @@ def test_prefeitura_edit_follows_rules_and_records_author(client: TestClient):
     assert telefone["autor_nome"] == "Gestor Quixeramobim"
 
 
-# ============================================================================
-# Testes dos Parâmetros de Validação dos Campos
-# ============================================================================
-
-
 def test_company_edit_fields_are_validated(client: TestClient):
     empresa = auth_headers(client, "empresa2@demo.com")
     casos = [
@@ -748,11 +723,6 @@ def test_validation_and_refusal_fields_are_validated(client: TestClient):
     assert "O motivo da recusa deve ter entre 5 e 500 caracteres." in mensagens(
         resposta
     )
-
-
-# ============================================================================
-# Testes de regressão
-# ============================================================================
 
 
 def test_register_rejects_email_pending_on_another_company(
@@ -868,14 +838,8 @@ def test_plaintext_password_prefix_is_not_accepted():
     assert verify_password("Senha@123", hash_password("Senha@123")) is True
 
 
-# ============================================================================
-# User Story: Recuperação e Redefinição de Senha
-# ============================================================================
-
-
 GENERIC_FORGOT_MSG = (
-    "Se o e-mail estiver cadastrado, as instruções e o token de "
-    "redefinição foram enviados."
+    "Se o e-mail estiver cadastrado, enviamos um código para redefinir a senha."
 )
 
 
@@ -981,7 +945,7 @@ def test_reset_password_single_use_invalidated(client: TestClient, db: Session):
         json={"token": token, "nova_senha": "SegundaTroca@2026"},
     )
     assert segunda.status_code == status.HTTP_400_BAD_REQUEST
-    assert segunda.json()["detail"] == "Token inválido ou já utilizado."
+    assert segunda.json()["detail"] == "Código inválido ou já utilizado."
 
 
 def test_reset_password_expired_token(client: TestClient, db: Session):
@@ -1007,7 +971,7 @@ def test_reset_password_expired_token(client: TestClient, db: Session):
     assert resposta.status_code == status.HTTP_400_BAD_REQUEST
     assert (
         resposta.json()["detail"]
-        == "Token expirado. Solicite uma nova recuperação de senha."
+        == "Código expirado. Peça um novo código na tela Recuperar senha."
     )
 
 
@@ -1083,11 +1047,6 @@ def test_reset_password_terminates_previous_active_sessions(
 
     sessao_nova = auth_headers(client, email, nova_senha)
     assert client.get("/auth/me", headers=sessao_nova).status_code == 200
-
-
-# ============================================================================
-# Testes do Envio de E-mails
-# ============================================================================
 
 
 @pytest.fixture

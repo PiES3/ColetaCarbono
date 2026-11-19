@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from sqlalchemy import Boolean, Float, Integer, inspect, text
@@ -9,9 +10,11 @@ from sqlalchemy import Boolean, Float, Integer, inspect, text
 from src.core.base import Base
 from src.core.config import CORS_ORIGINS, SEED_DEV_DATA
 from src.core.database import IS_SQLITE, engine
-from src.models import models  # noqa: F401  (registra as tabelas no metadata)
+from src.core.erros import tratar_erro_de_validacao
+from src.models import models  # noqa: F401
 from src.routers import (
     auth,
+    cotacao,
     dashboard,
     empresas,
     health,
@@ -133,6 +136,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_exception_handler(RequestValidationError, tratar_erro_de_validacao)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -149,3 +154,4 @@ app.include_router(materiais.router)
 app.include_router(prefeituras.router)
 app.include_router(dashboard.router)
 app.include_router(relatorios.router)
+app.include_router(cotacao.router)

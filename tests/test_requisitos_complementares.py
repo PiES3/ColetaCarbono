@@ -63,11 +63,6 @@ def _criar_empresa_aprovada(
     return empresa_id, _headers_login(client, email, senha)
 
 
-# ============================================================================
-# [RF#004] Exclusão / Desassociação de Empresa mediante validação da prefeitura
-# ============================================================================
-
-
 def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     empresa_id, headers_emp = _criar_empresa_aprovada(
         client, "414243440001", "desassociar@empresa.com"
@@ -75,7 +70,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     headers_gestor = _headers_login(client, "gestor@demo.com")
     headers_outro_gestor = _headers_login(client, "gestor2@demo.com")
 
-    # 1. Empresa solicita desassociação e depois cancela
     resp_sol = client.post(
         "/empresas/me/solicitar-desassociacao",
         json={"motivo": "Encerramento temporário"},
@@ -86,7 +80,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     assert resp_sol.json()["motivo_desassociacao"] == "Encerramento temporário"
     assert resp_sol.json()["empresa_status"] == "APROVADA"
 
-    # Solicitação duplicada deve retornar 400
     assert (
         client.post(
             "/empresas/me/solicitar-desassociacao",
@@ -96,14 +89,12 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
         == 400
     )
 
-    # Cancelamento pela própria empresa
     resp_cancel = client.delete(
         "/empresas/me/solicitar-desassociacao", headers=headers_emp
     )
     assert resp_cancel.status_code == 200
     assert resp_cancel.json()["desassociacao_solicitada"] is False
 
-    # 2. Solicita novamente e prefeitura recusa em um primeiro momento
     assert (
         client.post(
             "/empresas/me/solicitar-desassociacao",
@@ -113,7 +104,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
         == 200
     )
 
-    # Gestor do próprio município enxerga na fila; gestor de outro município não
     fila_quixada = client.get(
         "/empresas/solicitacoes-desassociacao", headers=headers_gestor
     ).json()
@@ -124,7 +114,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     ).json()
     assert all(e["id"] != empresa_id for e in fila_outro)
 
-    # Gestor de outro município não consegue decidir (404)
     assert (
         client.patch(
             f"/empresas/{empresa_id}/desassociacao",
@@ -134,7 +123,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
         == 404
     )
 
-    # Gestor recusa a desassociação -> empresa permanece APROVADA
     resp_recusa = client.patch(
         f"/empresas/{empresa_id}/desassociacao",
         json={"aprovar": False, "motivo_resposta": "Pendência de lote em análise"},
@@ -144,7 +132,6 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     assert resp_recusa.json()["empresa_status"] == "APROVADA"
     assert resp_recusa.json()["desassociacao_solicitada"] is False
 
-    # 3. Nova solicitação aprovada pelo gestor -> DESASSOCIADA e bloqueio de acesso
     assert (
         client.post(
             "/empresas/me/solicitar-desassociacao",
@@ -162,10 +149,8 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     assert resp_aprov.json()["empresa_status"] == "DESASSOCIADA"
     assert resp_aprov.json()["desassociacao_solicitada"] is False
 
-    # Token anterior da empresa não pode mais acessar rotas de empresa aprovada
     assert client.get("/empresas/me", headers=headers_emp).status_code == 403
 
-    # Novo login informa CADASTRO_DESASSOCIADO
     resp_login = client.post(
         "/auth/login",
         json={"email": "desassociar@empresa.com", "senha": "SenhaForte@123"},
@@ -174,15 +159,9 @@ def test_rf004_fluxo_completo_desassociacao_empresa(client: TestClient):
     assert resp_login.json()["detail"]["codigo"] == "CADASTRO_DESASSOCIADO"
 
 
-# ============================================================================
-# [RNF#001] Offline-First: Sincronização em lote com idempotência + [RNF#002]
-# ============================================================================
-
-
 def test_rnf001_sincronizacao_offline_lote_idempotente_e_conama(client: TestClient):
     headers_emp = _headers_login(client, "empresa@demo.com")
 
-    # Verifica cores CONAMA 275 nos materiais (RNF#002)
     materiais = client.get("/materiais/", headers=headers_emp).json()
     cores = {m["id"]: m["cor_conama"] for m in materiais}
     assert cores["papel"] == "#0057B8"
@@ -225,7 +204,6 @@ def test_rnf001_sincronizacao_offline_lote_idempotente_e_conama(client: TestClie
     assert dados1["total_erros"] == 1
     ids_primeira_vez = [r["id"] for r in dados1["registros"]]
 
-    # Reenvio do mesmo lote (queda de conexão no app mobile) -> não duplica!
     resp2 = client.post(
         "/registros/lote",
         json={"registros": lote["registros"][:2]},
@@ -238,11 +216,6 @@ def test_rnf001_sincronizacao_offline_lote_idempotente_e_conama(client: TestClie
     assert [r["id"] for r in dados2["registros"]] == ids_primeira_vez
 
 
-# ============================================================================
-# [RF#013], [RF#014] e [RF#015] Relatórios, PDF e Gráficos Temporais (28 dias)
-# ============================================================================
-
-
 def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
     client: TestClient, monkeypatch
 ):
@@ -253,7 +226,6 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
     headers_gestor = _headers_login(client, "gestor@demo.com")
     headers_emp = _headers_login(client, "empresa@demo.com")
 
-    # Cria registros validados em meses distintos para alimentar relatórios e gráficos
     for periodo, mat, vol in (
         ("2025-12", "vidro", 30.0),
         ("2026-09", "papel", 40.0),
@@ -272,7 +244,6 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
         )
         assert r.status_code == 201
 
-    # [RF#013] Agrupamentos semanal, mensal e anual + filtro por material
     for agrup in ("semanal", "mensal", "anual"):
         resp_rel = client.get(
             f"/relatorios/?agrupamento={agrup}", headers=headers_gestor
@@ -286,7 +257,6 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
         assert len(rel["por_material"]) >= 3
         assert all(len(g["por_material"]) >= 1 for g in rel["grupos"])
 
-    # Segmentado por tipo de material (apenas papel) na visão da Empresa
     resp_mat = client.get(
         "/relatorios/?agrupamento=mensal&material_id=papel", headers=headers_emp
     )
@@ -295,7 +265,6 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
     assert rel_mat["escopo"] == "EMPRESA"
     assert [m["material_id"] for m in rel_mat["por_material"]] == ["papel"]
 
-    # [RF#014] Exportação de Relatório em PDF (Prefeitura e Empresa)
     for rota in (
         "/relatorios/exportar.pdf?agrupamento=mensal",
         "/dashboard/relatorio.pdf?agrupamento=anual",
@@ -313,7 +282,6 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
     assert resp_pdf_emp.status_code == 200
     assert resp_pdf_emp.content.startswith(b"%PDF-1.")
 
-    # [RF#015] Painel visual e gráficos temporais (evolução nos últimos 28 dias)
     resp_evo = client.get(
         "/dashboard/evolucao-temporal?dias=28", headers=headers_gestor
     )
@@ -333,13 +301,7 @@ def test_rf013_rf014_rf015_relatorios_pdf_e_evolucao_28_dias(
     assert len(resp_evo_emp.json()["serie_diaria"]) == 14
 
 
-# ============================================================================
-# Endpoints de Estado de Saúde (Health Check: Liveness & Readiness)
-# ============================================================================
-
-
 def test_endpoints_saude_live_ready_e_degradacao(client: TestClient):
-    # 1. Liveness (GET, HEAD e alias /healthz)
     for rota in ("/health/live", "/healthz"):
         resp_live = client.get(rota)
         assert resp_live.status_code == 200
@@ -351,7 +313,6 @@ def test_endpoints_saude_live_ready_e_degradacao(client: TestClient):
     assert client.head("/health/live").status_code == 200
     assert client.head("/health").status_code == 200
 
-    # 2. Saúde geral e Readiness com banco saudável
     for rota in ("/health", "/health/", "/health/ready", "/readyz"):
         resp_ready = client.get(rota)
         assert resp_ready.status_code == 200
@@ -364,7 +325,6 @@ def test_endpoints_saude_live_ready_e_degradacao(client: TestClient):
         assert corpo["banco_dados"]["schema_integro"] is True
         assert corpo["banco_dados"]["latencia_ms"] >= 0
 
-    # 3. Falha simulada de banco de dados deve retornar HTTP 503 em /health e /ready
     class _SessaoComFalha:
         def get_bind(self):
             return None
@@ -383,7 +343,6 @@ def test_endpoints_saude_live_ready_e_degradacao(client: TestClient):
         assert corpo_falha["banco_dados"]["conectado"] is False
         assert "Banco indisponível" in corpo_falha["banco_dados"]["detalhe"]
 
-        # Mesmo com o banco fora, o liveness continua respondendo 200 OK
         assert client.get("/health/live").status_code == 200
     finally:
         if override_anterior is not None:

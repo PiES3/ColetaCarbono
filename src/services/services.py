@@ -7,11 +7,14 @@ from typing import TYPE_CHECKING, Any
 import requests
 from fastapi import HTTPException, status
 from loguru import logger
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from src.core.security import require_empresa
 from src.models.models import Empresa, HistoricoRegistro, Material, Registro
 from src.schemas.enums import AcaoHistoricoRegistro, StatusValidacao, StatusVinculo
+from src.services.email_service import email_service
+from src.services.material_service import materiais_visiveis, material_disponivel
 
 if TYPE_CHECKING:
     from src.schemas.schemas import (
@@ -112,6 +115,12 @@ class RegistroService:
                 detail="Registro já processado",
             )
 
+        if registro.correcao_solicitada:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O lançamento está aguardando a correção da empresa.",
+            )
+
         material = registro.material or (
             db.query(Material).filter(Material.id == registro.material_id).first()
         )
@@ -196,6 +205,7 @@ class RegistroService:
         registro.volume_validado = None
         registro.carbonoevitado = None
         registro.valorestimado = None
+        self._encerrar_pedido_correcao(registro)
 
         db.commit()
         db.refresh(registro)
@@ -203,6 +213,90 @@ class RegistroService:
         return registro
 
     rejeitar = rejeitar_registro
+
+    def _encerrar_pedido_correcao(self, registro: Registro) -> None:
+        registro.correcao_solicitada = False
+        registro.motivo_correcao = None
+        registro.data_solicitacao_correcao = None
+
+    def solicitar_correcao(
+        self,
+        db: Session,
+        registro_id: str,
+        motivo_correcao: str | None,
+        autor_id: str,
+        autor_nome: str,
+        prefeitura_id: str,
+    ) -> Registro:
+        """
+        Devolve um lançamento pendente para a empresa corrigir, com a
+        justificativa da prefeitura. O lançamento sai da fila de validação até
+        a empresa salvar a correção, e a empresa é avisada por e-mail.
+        """
+        registro = (
+            db.query(Registro)
+            .join(Registro.empresa)
+            .filter(
+                Registro.id == registro_id,
+                Empresa.prefeitura_id == prefeitura_id,
+            )
+            .first()
+        )
+        if not registro:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Registro não encontrado",
+            )
+
+        if registro.status_validacao != StatusValidacao.PENDENTE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Só lançamentos pendentes podem ser enviados para correção.",
+            )
+
+        if registro.correcao_solicitada:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A correção deste lançamento já foi solicitada.",
+            )
+
+        if not motivo_correcao:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A justificativa da correção é obrigatória.",
+            )
+
+        registro.correcao_solicitada = True
+        registro.motivo_correcao = motivo_correcao
+        registro.data_solicitacao_correcao = datetime.now(UTC)
+        self._registrar_alteracao(
+            db=db,
+            registro=registro,
+            acao=AcaoHistoricoRegistro.EDICAO,
+            autor_id=autor_id,
+            autor_nome=autor_nome,
+            campo="correcao_solicitada",
+            anterior=None,
+            novo=motivo_correcao,
+        )
+
+        db.commit()
+        db.refresh(registro)
+
+        empresa = registro.empresa
+        email_service.enviar(
+            destinatario=empresa.email,
+            assunto="ArClear: a prefeitura pediu a correção de um lançamento",
+            corpo=(
+                f"A Prefeitura de {empresa.prefeitura.nome} pediu a correção do "
+                f"lançamento {_resumo_registro(registro)}.\n\n"
+                f"Justificativa: {motivo_correcao}\n\n"
+                "Abra o aplicativo, corrija o lançamento e salve para enviá-lo "
+                "de novo para validação."
+            ),
+        )
+
+        return registro
 
     def criar_registro_gestor(
         self,
@@ -246,7 +340,7 @@ class RegistroService:
             if existente:
                 return existente
 
-        material = db.query(Material).filter(Material.id == dados.material_id).first()
+        material = material_disponivel(db, dados.material_id, prefeitura_id)
         if not material:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -346,7 +440,8 @@ class RegistroService:
         """
         Corrige um lançamento pendente ou rejeitado da empresa (HU012).
         Cada campo alterado fica no histórico com autor e data/hora, e um
-        lançamento rejeitado volta para a fila de validação.
+        lançamento rejeitado ou com correção solicitada volta para a fila de
+        validação.
         """
         registro = self._registro_alteravel(db, registro_id, empresa_id)
         alteracoes = dados.model_dump(exclude_none=True)
@@ -354,7 +449,9 @@ class RegistroService:
 
         novo_material_id = alteracoes.get("material_id")
         if novo_material_id and novo_material_id != registro.material_id:
-            material = db.get(Material, novo_material_id)
+            material = material_disponivel(
+                db, novo_material_id, registro.empresa.prefeitura_id
+            )
             if not material:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -395,6 +492,10 @@ class RegistroService:
                 )
             )
             registro.percentual_reciclado = novo_percentual
+
+        if mudancas and registro.correcao_solicitada:
+            mudancas.append(("correcao_solicitada", registro.motivo_correcao, None))
+            self._encerrar_pedido_correcao(registro)
 
         if mudancas and registro.status_validacao != StatusValidacao.PENDENTE:
             mudancas.append(
@@ -482,30 +583,48 @@ class RegistroService:
         self,
         db: Session,
         empresa_id: str,
-        itens: list[RegistroCreate],
+        prefeitura_id: str,
+        brutos: list[dict[str, Any]],
     ) -> SincronizacaoLoteResponse:
         """
         Sincroniza em lote registros coletados offline pelo app móvel (RNF#001).
         Garante idempotência via `client_id`: reenviar o mesmo lote por falha de
-        conexão devolve o registro já existente em vez de duplicá-lo.
+        conexão devolve o registro já existente em vez de duplicá-lo. Cada item
+        é validado separadamente, e um item inválido não impede os demais.
         """
         from src.schemas.schemas import (
             ErroSincronizacaoItem,
+            RegistroCreate,
             RegistroResponse,
             SincronizacaoLoteResponse,
         )
 
-        ids_materiais = {item.material_id for item in itens}
+        erros: list[ErroSincronizacaoItem] = []
+        itens: list[tuple[int, RegistroCreate]] = []
+        for indice, bruto in enumerate(brutos):
+            try:
+                itens.append((indice, RegistroCreate.model_validate(bruto)))
+            except ValidationError as erro:
+                cid = bruto.get("client_id")
+                erros.append(
+                    ErroSincronizacaoItem(
+                        indice=indice,
+                        client_id=cid.strip() if isinstance(cid, str) else None,
+                        erro=erro.errors()[0]["msg"],
+                    )
+                )
+
+        ids_materiais = {item.material_id for _, item in itens}
         materiais_validos = {
-            m_id
-            for (m_id,) in db.query(Material.id)
+            m.id
+            for m in materiais_visiveis(db, prefeitura_id)
             .filter(Material.id.in_(ids_materiais))
             .all()
         }
 
         client_ids_lote = {
             item.client_id.strip()
-            for item in itens
+            for _, item in itens
             if item.client_id and item.client_id.strip()
         }
         existentes_por_client_id: dict[str, Registro] = {}
@@ -524,10 +643,9 @@ class RegistroService:
 
         criados: list[Registro] = []
         resultado_ordenado: list[Registro] = []
-        erros: list[ErroSincronizacaoItem] = []
         total_duplicados = 0
 
-        for indice, item in enumerate(itens):
+        for indice, item in itens:
             cid = item.client_id.strip() if item.client_id else None
             cid = cid or None
 
@@ -565,8 +683,9 @@ class RegistroService:
             for novo in criados:
                 db.refresh(novo)
 
+        erros.sort(key=lambda erro: erro.indice)
         return SincronizacaoLoteResponse(
-            total_recebidos=len(itens),
+            total_recebidos=len(brutos),
             total_criados=len(criados),
             total_duplicados=total_duplicados,
             total_erros=len(erros),

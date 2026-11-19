@@ -8,6 +8,11 @@ AVISO_CERTIFICACAO = (
 )
 
 
+def _numero_br(valor: float, casas: int) -> str:
+    texto = f"{valor:,.{casas}f}"
+    return texto.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
 def _texto_pdf(texto: str) -> str:
     """Garante compatibilidade com fontes core Latin-1/CP1252 do PDF."""
     substituicoes = {
@@ -50,8 +55,7 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
     pdf.set_auto_page_break(auto=True, margin=16)
     pdf.add_page()
 
-    # Cabeçalho ecológico verde
-    pdf.set_fill_color(27, 94, 32)  # Verde floresta (#1B5E20)
+    pdf.set_fill_color(27, 94, 32)
     pdf.rect(10, 10, 190, 40, style="F")
 
     pdf.set_xy(15, 13)
@@ -86,14 +90,13 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
 
     pdf.set_y(56)
 
-    # Cards de KPIs principais
     resumo = relatorio.resumo
     val_tot_str = f"{resumo.registros_validados} / {resumo.total_registros}"
     cards = [
         ("Registros (Val/Tot)", val_tot_str),
-        ("Volume Validado (t)", f"{resumo.volume_total_validado:,.2f}"),
-        ("CO2 Evitado (tCO2eq)", f"{resumo.carbono_total_evitado:,.4f}"),
-        ("Valor Estimado (R$)", f"R$ {resumo.valor_total_estimado:,.2f}"),
+        ("Volume Validado (t)", _numero_br(resumo.volume_total_validado, 2)),
+        ("CO2 Evitado (tCO2eq)", _numero_br(resumo.carbono_total_evitado, 4)),
+        ("Valor Estimado (R$)", f"R$ {_numero_br(resumo.valor_total_estimado, 2)}"),
     ]
 
     x_inicial = 10.0
@@ -101,7 +104,7 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
     y_cards = pdf.get_y()
     for indice, (titulo, valor) in enumerate(cards):
         x = x_inicial + indice * (largura_card + 3.0)
-        pdf.set_fill_color(232, 245, 233)  # Verde claro (#E8F5E9)
+        pdf.set_fill_color(232, 245, 233)
         pdf.set_draw_color(165, 214, 167)
         pdf.rect(x, y_cards, largura_card, 18, style="DF")
 
@@ -117,7 +120,6 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
 
     pdf.set_y(y_cards + 24)
 
-    # Seção 1: Segmentação por Tipo de Material (CONAMA 275)
     pdf.set_text_color(27, 94, 32)
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(
@@ -156,20 +158,27 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
             x_linha = pdf.get_x()
             r, g, b = _hex_para_rgb(item.cor_conama)
 
-            pdf.cell(col_mat[0], 7, _texto_pdf(f"    {item.categoria}"), border=1)
-            # Marcador colorido CONAMA 275
+            pdf.cell(col_mat[0], 7, "", border=1)
             pdf.set_fill_color(r, g, b)
             pdf.rect(x_linha + 2, y_linha + 2, 3, 3, style="F")
+            pdf.set_xy(x_linha + 6, y_linha)
+            pdf.cell(col_mat[0] - 6, 7, _texto_pdf(item.categoria))
+            pdf.set_xy(x_linha + col_mat[0], y_linha)
 
             pdf.cell(col_mat[1], 7, str(item.total_registros), border=1, align="C")
-            pdf.cell(col_mat[2], 7, f"{item.volume_validado:,.2f}", border=1, align="R")
-            pdf.cell(col_mat[3], 7, f"{item.carbono_evitado:,.4f}", border=1, align="R")
-            pdf.cell(col_mat[4], 7, f"{item.valor_estimado:,.2f}", border=1, align="R")
+            pdf.cell(
+                col_mat[2], 7, _numero_br(item.volume_validado, 2), border=1, align="R"
+            )
+            pdf.cell(
+                col_mat[3], 7, _numero_br(item.carbono_evitado, 4), border=1, align="R"
+            )
+            pdf.cell(
+                col_mat[4], 7, _numero_br(item.valor_estimado, 2), border=1, align="R"
+            )
             pdf.ln()
 
     pdf.ln(6)
 
-    # Seção 2: Consolidação por Período
     pdf.set_text_color(27, 94, 32)
     pdf.set_font("Helvetica", "B", 12)
     titulo_per = f"2. Evolução por Período ({relatorio.agrupamento.value.capitalize()})"
@@ -207,9 +216,15 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
                 border=1,
                 align="C",
             )
-            pdf.cell(col_per[2], 7, f"{grp.volume_validado:,.2f}", border=1, align="R")
-            pdf.cell(col_per[3], 7, f"{grp.carbono_evitado:,.4f}", border=1, align="R")
-            pdf.cell(col_per[4], 7, f"{grp.valor_estimado:,.2f}", border=1, align="R")
+            pdf.cell(
+                col_per[2], 7, _numero_br(grp.volume_validado, 2), border=1, align="R"
+            )
+            pdf.cell(
+                col_per[3], 7, _numero_br(grp.carbono_evitado, 4), border=1, align="R"
+            )
+            pdf.cell(
+                col_per[4], 7, _numero_br(grp.valor_estimado, 2), border=1, align="R"
+            )
             pdf.ln()
 
     if relatorio.por_empresa:
@@ -252,9 +267,15 @@ def gerar_pdf_relatorio(relatorio: RelatorioConsolidadoResponse) -> bytes:
                 border=1,
                 align="C",
             )
-            pdf.cell(col_emp[2], 7, f"{emp.volume_validado:,.2f}", border=1, align="R")
-            pdf.cell(col_emp[3], 7, f"{emp.carbono_evitado:,.4f}", border=1, align="R")
-            pdf.cell(col_emp[4], 7, f"{emp.valor_estimado:,.2f}", border=1, align="R")
+            pdf.cell(
+                col_emp[2], 7, _numero_br(emp.volume_validado, 2), border=1, align="R"
+            )
+            pdf.cell(
+                col_emp[3], 7, _numero_br(emp.carbono_evitado, 4), border=1, align="R"
+            )
+            pdf.cell(
+                col_emp[4], 7, _numero_br(emp.valor_estimado, 2), border=1, align="R"
+            )
             pdf.ln()
 
     pdf.ln(8)

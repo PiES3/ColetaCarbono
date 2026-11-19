@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import (
     AliasChoices,
@@ -18,7 +19,12 @@ from src.schemas.enums import (
 )
 from src.schemas.validacao import (
     normalizar_cnpj,
+    normalizar_email,
+    validar_categoria_material,
     validar_endereco,
+    validar_fator_emissao,
+    validar_justificativa_correcao,
+    validar_motivo_rejeicao,
     validar_nome_fantasia,
     validar_percentual,
     validar_periodo,
@@ -33,33 +39,48 @@ class TimestampSchemaMixin(BaseModel):
     updated_at: datetime | None = None
 
 
+class EmailNormalizado(BaseModel):
+    @field_validator("email", check_fields=False)
+    @classmethod
+    def checar_email(cls, valor: str) -> str:
+        return normalizar_email(valor)
+
+
 class MaterialBase(BaseModel):
     categoria: str
     fator_emissaoipcc: float
 
 
 class MaterialCreate(MaterialBase):
-    categoria: str = Field(min_length=1, max_length=100)
-    fator_emissaoipcc: float = Field(ge=0, allow_inf_nan=False)
-
-    @field_validator("categoria", mode="before")
+    @field_validator("categoria")
     @classmethod
-    def limpar_categoria(cls, valor: object) -> object:
-        return valor.strip() if isinstance(valor, str) else valor
+    def checar_categoria(cls, valor: str) -> str:
+        return validar_categoria_material(valor)
+
+    @field_validator("fator_emissaoipcc")
+    @classmethod
+    def checar_fator(cls, valor: float) -> float:
+        return validar_fator_emissao(valor)
 
 
 class MaterialUpdate(BaseModel):
-    categoria: str | None = Field(default=None, min_length=1, max_length=100)
-    fator_emissaoipcc: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    categoria: str | None = None
+    fator_emissaoipcc: float | None = None
 
-    @field_validator("categoria", mode="before")
+    @field_validator("categoria")
     @classmethod
-    def limpar_categoria(cls, valor: object) -> object:
-        return valor.strip() if isinstance(valor, str) else valor
+    def checar_categoria(cls, valor: str | None) -> str | None:
+        return None if valor is None else validar_categoria_material(valor)
+
+    @field_validator("fator_emissaoipcc")
+    @classmethod
+    def checar_fator(cls, valor: float | None) -> float | None:
+        return None if valor is None else validar_fator_emissao(valor)
 
 
 class MaterialResponse(MaterialBase, TimestampSchemaMixin):
     id: str
+    prefeitura_id: str | None = None
     cor_conama: str = "#6C757D"
 
     model_config = ConfigDict(from_attributes=True)
@@ -79,7 +100,7 @@ class PrefeituraResponse(PrefeituraBase, TimestampSchemaMixin):
     model_config = ConfigDict(from_attributes=True)
 
 
-class UsuarioAdminBase(BaseModel):
+class UsuarioAdminBase(EmailNormalizado):
     nome: str
     email: EmailStr
     perfil: Perfil = Perfil.GESTOR
@@ -94,7 +115,7 @@ class UsuarioAdminCreate(UsuarioAdminBase):
     )
 
 
-class UsuarioAdminUpdate(BaseModel):
+class UsuarioAdminUpdate(EmailNormalizado):
     nome: str | None = None
     email: EmailStr | None = None
     perfil: Perfil | None = None
@@ -107,7 +128,7 @@ class UsuarioAdminResponse(UsuarioAdminBase, TimestampSchemaMixin):
     model_config = ConfigDict(from_attributes=True)
 
 
-class UsuarioEmpresaBase(BaseModel):
+class UsuarioEmpresaBase(EmailNormalizado):
     nome: str
     email: EmailStr
     perfil: Perfil = Perfil.COMUM
@@ -122,7 +143,7 @@ class UsuarioEmpresaCreate(UsuarioEmpresaBase):
     )
 
 
-class UsuarioEmpresaUpdate(BaseModel):
+class UsuarioEmpresaUpdate(EmailNormalizado):
     nome: str | None = None
     email: EmailStr | None = None
     perfil: Perfil | None = None
@@ -145,6 +166,11 @@ class EmpresaBase(BaseModel):
 
 
 class ValidacaoDadosEmpresa(BaseModel):
+    @field_validator("email", check_fields=False)
+    @classmethod
+    def checar_email(cls, valor: str | None) -> str | None:
+        return normalizar_email(valor)
+
     @field_validator("cnpj", check_fields=False)
     @classmethod
     def checar_cnpj(cls, valor: str | None) -> str | None:
@@ -287,11 +313,6 @@ class RegistroCreate(RegistroBase):
 class RegistroGestorCreate(RegistroCreate):
     empresa_id: str
 
-    @field_validator("periodo")
-    @classmethod
-    def checar_periodo(cls, valor: str) -> str:
-        return validar_periodo(valor, permitir_futuro=True)
-
 
 class RegistroUpdate(BaseModel):
     material_id: str | None = None
@@ -333,6 +354,24 @@ class RegistroRejeicaoRequest(BaseModel):
     )
     validador_id: str | None = None
 
+    @field_validator("motivo_rejeicao")
+    @classmethod
+    def checar_motivo(cls, valor: str | None) -> str | None:
+        return validar_motivo_rejeicao(valor)
+
+
+class RegistroCorrecaoRequest(BaseModel):
+    motivo_correcao: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("motivo_correcao", "justificativa", "motivo"),
+        description="Justificativa do pedido de correção (obrigatória).",
+    )
+
+    @field_validator("motivo_correcao")
+    @classmethod
+    def checar_motivo(cls, valor: str | None) -> str | None:
+        return validar_justificativa_correcao(valor)
+
 
 class RegistroValidacaoUpdate(BaseModel):
     status_validacao: StatusValidacao
@@ -342,6 +381,11 @@ class RegistroValidacaoUpdate(BaseModel):
     )
     validador_id: str | None = None
     volume_validado: float | None = None
+
+    @field_validator("motivo_rejeicao")
+    @classmethod
+    def checar_motivo(cls, valor: str | None) -> str | None:
+        return validar_motivo_rejeicao(valor)
 
     @field_validator("volume_validado")
     @classmethod
@@ -368,6 +412,9 @@ class RegistroResponse(RegistroBase, TimestampSchemaMixin):
     status: StatusValidacao | None = None
     motivo_rejeicao: str | None = None
     motivo: str | None = None
+    correcao_solicitada: bool = False
+    motivo_correcao: str | None = None
+    data_solicitacao_correcao: datetime | None = None
     volume_validado: float | None = None
     valorestimado: float | None = None
     carbonoevitado: float | None = None
@@ -404,7 +451,7 @@ class EmpresaComUsuariosResponse(EmpresaResponse):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(EmailNormalizado):
     email: EmailStr
     senha: str
 
@@ -432,11 +479,11 @@ class CurrentUserResponse(BaseModel):
     status_vinculo: StatusVinculo | None = None
 
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordRequest(EmailNormalizado):
     email: EmailStr
 
 
-class ConfirmacaoEmailRequest(BaseModel):
+class ConfirmacaoEmailRequest(EmailNormalizado):
     email: EmailStr
 
 
@@ -511,7 +558,7 @@ class DashboardResumoResponse(BaseModel):
 
 
 class SincronizacaoLoteRequest(BaseModel):
-    registros: list[RegistroCreate] = Field(min_length=1, max_length=500)
+    registros: list[dict[str, Any]] = Field(min_length=1, max_length=500)
 
 
 class ErroSincronizacaoItem(BaseModel):
@@ -578,6 +625,13 @@ class RelatorioConsolidadoResponse(BaseModel):
     por_material: list[EstatisticaMaterialItem] = []
     por_empresa: list[EstatisticaEmpresaItem] = []
     grupos: list[GrupoRelatorioItem] = []
+
+
+class CotacaoResponse(BaseModel):
+    moeda: str = "BRL"
+    dolar: float
+    valor_tonelada_usd: float
+    valor_tonelada_brl: float
 
 
 class HealthLiveResponse(BaseModel):

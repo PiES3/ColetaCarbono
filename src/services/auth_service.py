@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from loguru import logger
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,7 @@ from src.core.config import (
     RESET_TOKEN_EXPIRE_MINUTES,
 )
 from src.core.security import (
+    bloqueio_da_empresa,
     create_access_token,
     get_password_hash_signature,
     hash_password,
@@ -32,6 +33,10 @@ from src.schemas.schemas import EmpresaCreate, TokenResponse
 from src.services.email_service import email_service
 
 
+def mesmo_email(coluna, email: str | None):
+    return func.lower(coluna) == (email or "").strip().lower()
+
+
 def formatar_prazo(minutos: int) -> str:
     if minutos % 60 == 0:
         horas = minutos // 60
@@ -48,7 +53,6 @@ class AuthService:
         """
         validate_password_complexity(dados.senha, rotulo="A senha")
 
-        # 1. Verifica se a prefeitura selecionada existe
         prefeitura = (
             db.query(Prefeitura).filter(Prefeitura.id == dados.prefeitura_id).first()
         )
@@ -58,21 +62,22 @@ class AuthService:
                 detail="Prefeitura não encontrada.",
             )
 
-        # 2. Verifica unicidade do CNPJ
         if db.query(Empresa.id).filter(Empresa.cnpj == dados.cnpj).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="CNPJ já cadastrado.",
             )
 
-        # 3. Verifica se o e-mail já é usado por um admin de prefeitura
-        if db.query(UsuarioAdmin.id).filter(UsuarioAdmin.email == dados.email).first():
+        if (
+            db.query(UsuarioAdmin.id)
+            .filter(mesmo_email(UsuarioAdmin.email, dados.email))
+            .first()
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="E-mail já cadastrado para um administrador da prefeitura.",
             )
 
-        # 4. Verifica e-mails de empresas (inclusive trocas pendentes) e usuários
         if self.email_em_uso(db, dados.email):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -94,7 +99,6 @@ class AuthService:
         try:
             db.flush()
         except IntegrityError:
-            # Cadastro simultâneo com o mesmo CNPJ/e-mail.
             db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -113,8 +117,11 @@ class AuthService:
         - Prefeitura (UsuarioAdmin): atua como superusuário (user_type = 'PREFEITURA').
         - Empresa: permissões padrão de empresa (user_type = 'EMPRESA').
         """
-        # 1. Verifica se é um usuário da Prefeitura (Superusuário)
-        admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.email == email).first()
+        admin = (
+            db.query(UsuarioAdmin)
+            .filter(mesmo_email(UsuarioAdmin.email, email))
+            .first()
+        )
         if admin and verify_password(senha, admin.senha_hash):
             token_payload = {
                 "sub": admin.id,
@@ -137,8 +144,7 @@ class AuthService:
                 status_vinculo=None,
             )
 
-        # 2. Verifica se é uma Empresa
-        empresa = db.query(Empresa).filter(Empresa.email == email).first()
+        empresa = db.query(Empresa).filter(mesmo_email(Empresa.email, email)).first()
         if empresa and verify_password(senha, empresa.pwd_hash):
             self._barrar_empresa_nao_liberada(empresa)
             token_payload = {
@@ -164,9 +170,10 @@ class AuthService:
                 status_vinculo=empresa.empresa_status,
             )
 
-        # 3. Verifica se é um Usuário de Empresa
         user_empresa = (
-            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == email).first()
+            db.query(UsuarioEmpresa)
+            .filter(mesmo_email(UsuarioEmpresa.email, email))
+            .first()
         )
         if user_empresa and verify_password(senha, user_empresa.senha_hash):
             self._barrar_empresa_nao_liberada(user_empresa.empresa)
@@ -191,7 +198,6 @@ class AuthService:
                 status_vinculo=user_empresa.empresa.empresa_status,
             )
 
-        # 4. Credenciais não encontradas ou inválidas
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas.",
@@ -204,17 +210,22 @@ class AuthService:
         Por motivos de segurança, a mensagem retornada é idêntica tanto para
         e-mails cadastrados quanto para não cadastrados (evita enumeração).
         """
-        admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.email == email).first()
-        empresa = db.query(Empresa).filter(Empresa.email == email).first()
+        admin = (
+            db.query(UsuarioAdmin)
+            .filter(mesmo_email(UsuarioAdmin.email, email))
+            .first()
+        )
+        empresa = db.query(Empresa).filter(mesmo_email(Empresa.email, email)).first()
         user_empresa = (
-            db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == email).first()
+            db.query(UsuarioEmpresa)
+            .filter(mesmo_email(UsuarioEmpresa.email, email))
+            .first()
         )
 
         if admin or empresa or user_empresa:
             validade = formatar_prazo(RESET_TOKEN_EXPIRE_MINUTES)
-            # Invalida tokens anteriores não utilizados para este e-mail
             db.query(TokenRedefinicaoSenha).filter(
-                TokenRedefinicaoSenha.email == email,
+                mesmo_email(TokenRedefinicaoSenha.email, email),
                 TokenRedefinicaoSenha.utilizado.is_(False),
             ).update({"utilizado": True})
 
@@ -223,7 +234,7 @@ class AuthService:
             expiracao = agora + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
 
             token_record = TokenRedefinicaoSenha(
-                email=email,
+                email=email.strip().lower(),
                 token=token,
                 expiracao=expiracao,
                 utilizado=False,
@@ -248,8 +259,8 @@ class AuthService:
 
         return {
             "message": (
-                "Se o e-mail estiver cadastrado, as instruções e o token de "
-                "redefinição foram enviados."
+                "Se o e-mail estiver cadastrado, enviamos um código para "
+                "redefinir a senha."
             )
         }
 
@@ -263,10 +274,8 @@ class AuthService:
         - Validação de expiração e uso único do token.
         - Invalidação de todas as sessões anteriores ativas.
         """
-        # 1. Validação de complexidade mínima da nova senha
         validate_password_complexity(nova_senha)
 
-        # 2. Busca do token no banco
         token_record = (
             db.query(TokenRedefinicaoSenha)
             .filter(TokenRedefinicaoSenha.token == token)
@@ -275,10 +284,9 @@ class AuthService:
         if not token_record or token_record.utilizado:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token inválido ou já utilizado.",
+                detail="Código inválido ou já utilizado.",
             )
 
-        # 3. Verificação de expiração
         agora = datetime.now(UTC)
         expiracao = token_record.expiracao
         if expiracao.tzinfo is None:
@@ -287,29 +295,31 @@ class AuthService:
         if agora > expiracao:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token expirado. Solicite uma nova recuperação de senha.",
+                detail="Código expirado. Peça um novo código na tela Recuperar senha.",
             )
 
-        # 4. Localiza o usuário associado
         admin = (
             db.query(UsuarioAdmin)
-            .filter(UsuarioAdmin.email == token_record.email)
+            .filter(mesmo_email(UsuarioAdmin.email, token_record.email))
             .first()
         )
-        empresa = db.query(Empresa).filter(Empresa.email == token_record.email).first()
+        empresa = (
+            db.query(Empresa)
+            .filter(mesmo_email(Empresa.email, token_record.email))
+            .first()
+        )
         user_empresa = (
             db.query(UsuarioEmpresa)
-            .filter(UsuarioEmpresa.email == token_record.email)
+            .filter(mesmo_email(UsuarioEmpresa.email, token_record.email))
             .first()
         )
 
         if not (admin or empresa or user_empresa):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Usuário associado a este token não foi encontrado.",
+                detail="Usuário associado a este código não foi encontrado.",
             )
 
-        # 5. Atualiza a senha gerando novo hash bcrypt
         novo_hash = hash_password(nova_senha)
         if admin:
             admin.senha_hash = novo_hash
@@ -318,10 +328,9 @@ class AuthService:
         if user_empresa:
             user_empresa.senha_hash = novo_hash
 
-        # 6. Invalida o token após o primeiro uso
         token_record.utilizado = True
         db.query(TokenRedefinicaoSenha).filter(
-            TokenRedefinicaoSenha.email == token_record.email,
+            mesmo_email(TokenRedefinicaoSenha.email, token_record.email),
             TokenRedefinicaoSenha.utilizado.is_(False),
         ).update({"utilizado": True})
 
@@ -384,10 +393,15 @@ class AuthService:
         """
         empresa = (
             db.query(Empresa)
-            .filter(or_(Empresa.email == email, Empresa.email_pendente == email))
+            .filter(
+                or_(
+                    mesmo_email(Empresa.email, email),
+                    mesmo_email(Empresa.email_pendente, email),
+                )
+            )
             .first()
         )
-        if empresa and empresa.email_pendente == email:
+        if empresa and (empresa.email_pendente or "").lower() == email.lower():
             self.gerar_token_confirmacao(empresa, destino=email)
             db.commit()
         elif (
@@ -408,13 +422,18 @@ class AuthService:
         self, db: Session, email: str, ignorar_empresa_id: str | None = None
     ) -> bool:
         empresas = db.query(Empresa).filter(
-            or_(Empresa.email == email, Empresa.email_pendente == email)
+            or_(
+                mesmo_email(Empresa.email, email),
+                mesmo_email(Empresa.email_pendente, email),
+            )
         )
         if ignorar_empresa_id:
             empresas = empresas.filter(Empresa.id != ignorar_empresa_id)
 
-        admin = db.query(UsuarioAdmin).filter(UsuarioAdmin.email == email)
-        usuario = db.query(UsuarioEmpresa).filter(UsuarioEmpresa.email == email)
+        admin = db.query(UsuarioAdmin).filter(mesmo_email(UsuarioAdmin.email, email))
+        usuario = db.query(UsuarioEmpresa).filter(
+            mesmo_email(UsuarioEmpresa.email, email)
+        )
         return any(q.first() is not None for q in (empresas, admin, usuario))
 
     def gerar_token_confirmacao(
@@ -483,36 +502,13 @@ class AuthService:
         return {"message": "E-mail atualizado. Use o novo e-mail para entrar."}
 
     def _barrar_empresa_nao_liberada(self, empresa: Empresa) -> None:
-        if empresa.empresa_status == StatusVinculo.APROVADA:
-            return
-
-        prefeitura = f"Prefeitura de {empresa.prefeitura.nome}"
-
-        if empresa.empresa_status == StatusVinculo.AGUARDANDO_VALIDACAO:
-            if not empresa.email_confirmado:
-                codigo = "EMAIL_NAO_CONFIRMADO"
-                mensagem = (
-                    f"Enviamos um link para {empresa.email}. Depois de confirmar, "
-                    f"a {prefeitura} analisa seu cadastro."
-                )
-            else:
-                codigo = "CADASTRO_PENDENTE"
-                mensagem = (
-                    f"Seu e-mail já foi confirmado. Falta a {prefeitura} aprovar "
-                    "o vínculo da sua empresa. Avisaremos por e-mail."
-                )
-        elif empresa.empresa_status == StatusVinculo.RECUSADA:
-            codigo = "CADASTRO_RECUSADO"
-            motivo = empresa.motivo_recusa or "não informado"
-            mensagem = f"A {prefeitura} recusou o vínculo. Motivo: {motivo}"
-        else:
-            codigo = "CADASTRO_DESASSOCIADO"
-            mensagem = f"Sua empresa não está mais vinculada à {prefeitura}."
-
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"codigo": codigo, "mensagem": mensagem},
-        )
+        bloqueio = bloqueio_da_empresa(empresa)
+        if bloqueio:
+            codigo, mensagem = bloqueio
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"codigo": codigo, "mensagem": mensagem},
+            )
 
 
 auth_service = AuthService()

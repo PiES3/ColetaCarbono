@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.core.security import get_current_user
+from src.routers.parametros import PeriodoConsulta
 from src.schemas.enums import AgrupamentoRelatorio
 from src.schemas.schemas import (
     DashboardResumoResponse,
@@ -24,9 +25,9 @@ def obter_resumo_dashboard(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
@@ -90,9 +91,9 @@ def obter_relatorio_via_dashboard(
     agrupamento: AgrupamentoRelatorio = AgrupamentoRelatorio.MENSAL,
     empresa_id: str | None = None,
     material_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
 ):
     return estatisticas_service.relatorio_consolidado(
         db=db,
@@ -113,9 +114,9 @@ def exportar_pdf_via_dashboard(
     agrupamento: AgrupamentoRelatorio = AgrupamentoRelatorio.MENSAL,
     empresa_id: str | None = None,
     material_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
 ):
     relatorio = estatisticas_service.relatorio_consolidado(
         db=db,

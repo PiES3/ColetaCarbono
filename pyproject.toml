@@ -26,6 +26,9 @@ dev = [
     "ruff>=0.16.9",
 ]
 
+[tool.ruff]
+extend-exclude = ["skills"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "FAST"]
 

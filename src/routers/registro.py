@@ -8,11 +8,11 @@ from sqlalchemy.orm import Session, joinedload
 from src.core.database import get_db
 from src.core.security import (
     get_current_user,
-    get_current_user_optional,
     require_empresa,
     require_superuser,
 )
-from src.models.models import Empresa, Material, Registro
+from src.models.models import Empresa, Registro
+from src.routers.parametros import PeriodoConsulta
 from src.schemas.enums import StatusValidacao
 from src.schemas.schemas import (
     EstatisticaEmpresaItem,
@@ -21,6 +21,7 @@ from src.schemas.schemas import (
     EvolucaoTemporalResponse,
     HistoricoRegistroResponse,
     RegistroAcompanhamentoResponse,
+    RegistroCorrecaoRequest,
     RegistroCreate,
     RegistroGestorCreate,
     RegistroRejeicaoRequest,
@@ -33,6 +34,7 @@ from src.schemas.schemas import (
     SincronizacaoLoteResponse,
 )
 from src.services.estatisticas_service import estatisticas_service
+from src.services.material_service import material_disponivel
 from src.services.services import registro_service
 
 router = APIRouter(prefix="/registros", tags=["Registros"])
@@ -66,9 +68,9 @@ def _normalizar_status(
 
 def _aplicar_filtros_periodo(
     query: ConsultaSQL,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
 ) -> ConsultaSQL:
@@ -144,25 +146,14 @@ def criar_registro_gestor(
 def criar_registro(
     registro_in: RegistroCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[
-        dict[str, Any] | None, Depends(get_current_user_optional)
-    ] = None,
+    current_user: Annotated[dict[str, Any], Depends(require_empresa)],
 ):
     """
     Recebe um novo registro da empresa autenticada ou da sincronização móvel.
-    A prefeitura deve usar o endpoint dedicado `/registros/gestor`.
+    O lançamento fica sempre na empresa do usuário autenticado. A prefeitura
+    deve usar o endpoint dedicado `/registros/gestor`.
     """
-    if current_user is not None:
-        require_empresa(current_user)
-        empresa_id = current_user["empresa_id"]
-    elif registro_in.empresa_id:
-        empresa_id = registro_in.empresa_id
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Autenticação necessária.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    empresa_id = current_user["empresa_id"]
 
     client_id = registro_in.client_id.strip() if registro_in.client_id else None
     client_id = client_id or None
@@ -178,7 +169,9 @@ def criar_registro(
         if existente:
             return existente
 
-    if not db.get(Material, registro_in.material_id):
+    if not material_disponivel(
+        db, registro_in.material_id, current_user["prefeitura_id"]
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Material inválido."
         )
@@ -223,7 +216,8 @@ def sincronizar_registros_offline(
     return registro_service.sincronizar_lote(
         db=db,
         empresa_id=usuario["empresa_id"],
-        itens=dados.registros,
+        prefeitura_id=usuario["prefeitura_id"],
+        brutos=dados.registros,
     )
 
 
@@ -248,9 +242,9 @@ def acompanhar_registros_empresa(
     empresa_id: str | None = None,
     status_param: Annotated[str | None, Query(alias="status")] = None,
     status_validacao: StatusValidacao | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
     apenas_lancados_pela_empresa: bool | None = None,
@@ -297,9 +291,9 @@ def estatisticas_resumo_registros(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
@@ -327,9 +321,9 @@ def estatisticas_registros_por_status(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
@@ -364,9 +358,9 @@ def estatisticas_registros_por_material(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
 ):
@@ -399,8 +393,8 @@ def estatisticas_registros_por_periodo(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(get_current_user)],
     empresa_id: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
@@ -452,9 +446,9 @@ def estatisticas_evolucao_diaria(
 def estatisticas_registros_por_empresa(
     db: Annotated[Session, Depends(get_db)],
     usuario: Annotated[dict[str, Any], Depends(require_superuser)],
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     material_id: str | None = None,
     data_inicio: datetime | None = None,
     data_fim: datetime | None = None,
@@ -512,12 +506,13 @@ def listar_registros(
     material_id: str | None = None,
     status_param: Annotated[str | None, Query(alias="status")] = None,
     status_validacao: StatusValidacao | None = None,
-    periodo: str | None = None,
-    periodo_inicio: str | None = None,
-    periodo_fim: str | None = None,
+    periodo: PeriodoConsulta = None,
+    periodo_inicio: PeriodoConsulta = None,
+    periodo_fim: PeriodoConsulta = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
     apenas_prefeitura: bool | None = None,
+    correcao_solicitada: bool | None = None,
     ordem: Literal["desc", "asc"] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
@@ -527,8 +522,9 @@ def listar_registros(
     antigo (`ordem=desc`) ou o contrário (`ordem=asc`).
     A empresa vê apenas os próprios registros; a prefeitura vê os das empresas
     do seu município. Pode ser filtrado por empresa_id, material_id, status,
-    período e origem (`apenas_prefeitura`). O total de registros encontrados,
-    sem a paginação, vai no cabeçalho `X-Total-Count`.
+    período, origem (`apenas_prefeitura`) e pedido de correção em aberto
+    (`correcao_solicitada`). O total de registros encontrados, sem a
+    paginação, vai no cabeçalho `X-Total-Count`.
     """
     query = registros_visiveis(db, usuario)
     if empresa_id:
@@ -548,6 +544,9 @@ def listar_registros(
         query = query.filter(Registro.criado_por_gestor_id.isnot(None))
     elif apenas_prefeitura is False:
         query = query.filter(Registro.criado_por_gestor_id.is_(None))
+
+    if correcao_solicitada is not None:
+        query = query.filter(Registro.correcao_solicitada == correcao_solicitada)
 
     response.headers["X-Total-Count"] = str(query.count())
     ordenacao = (
@@ -586,9 +585,10 @@ def editar_registro(
 ):
     """
     Corrige um lançamento da empresa que ainda não foi validado (HU012).
-    Só lançamentos pendentes ou rejeitados podem ser editados, e um lançamento
-    rejeitado volta para a fila de validação depois da correção. Cada campo
-    alterado fica no histórico com autor e data/hora.
+    Só lançamentos pendentes ou rejeitados podem ser editados. Um lançamento
+    rejeitado ou com correção solicitada pela prefeitura volta para a fila de
+    validação depois da correção. Cada campo alterado fica no histórico com
+    autor e data/hora.
     """
     return registro_service.editar_registro(
         db=db,
@@ -663,6 +663,29 @@ def rejeitar_registro(
         registro_id=registro_id,
         motivo_rejeicao=dados_rejeicao.motivo_rejeicao,
         validador_id=current_user["id"],
+        prefeitura_id=current_user["prefeitura_id"],
+    )
+
+
+@router.patch("/{registro_id}/solicitar-correcao", response_model=RegistroResponse)
+def solicitar_correcao_registro(
+    registro_id: str,
+    dados: RegistroCorrecaoRequest,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict[str, Any], Depends(require_superuser)],
+):
+    """
+    Endpoint utilizado pelo Gestor de Resíduos da Prefeitura para devolver um
+    lançamento pendente à empresa, pedindo uma correção. A justificativa é
+    obrigatória e aparece para a empresa. O lançamento não pode ser validado
+    até a empresa salvar a correção, quando volta para a fila de validação.
+    """
+    return registro_service.solicitar_correcao(
+        db=db,
+        registro_id=registro_id,
+        motivo_correcao=dados.motivo_correcao,
+        autor_id=current_user["id"],
+        autor_nome=current_user["nome"],
         prefeitura_id=current_user["prefeitura_id"],
     )
 
